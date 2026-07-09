@@ -10,7 +10,6 @@ struct MeetingDetailView: View {
     @State private var title: String
     @State private var publishState: PublishState = .idle
     @State private var showDeleteConfirm = false
-    @State private var showCatboxConfirm = false
     // Edit drafts live here, not in the tab views, so an accidental tab switch
     // can't destroy ten minutes of transcript fixes. nil = not editing.
     @State private var notesDraft: String?
@@ -143,12 +142,12 @@ struct MeetingDetailView: View {
     private var publishMenu: some View {
         Menu {
             if GitHubGist.isAvailable {
-                Button("Publish to secret Gist") { publish(.gist) }
+                Button("Publish to secret Gist") { publish() }
             } else {
                 Button("Publish to secret Gist (needs gh)") {}
                     .disabled(true)
             }
-            Button("Publish public link…") { showCatboxConfirm = true }
+            Button("Preview in browser") { previewInBrowser() }
             if let existing = meeting.publishedURL, let url = URL(string: existing) {
                 Divider()
                 Link("Open published page", destination: url)
@@ -176,11 +175,6 @@ struct MeetingDetailView: View {
         } message: {
             Text("This permanently removes the audio, transcript, and notes from your Mac.")
         }
-        .confirmationDialog("Publish a public link?", isPresented: $showCatboxConfirm) {
-            Button("Upload to catbox.moe") { publish(.catbox) }
-        } message: {
-            Text("This uploads the notes and transcript to catbox.moe, a free third-party host. Anyone with the link can view them, and the page isn't tied to an account you control. For a link on your own GitHub, install gh and use “Publish to secret Gist”.")
-        }
     }
 
     @ViewBuilder
@@ -203,12 +197,7 @@ struct MeetingDetailView: View {
         app.store.upsert(m)
     }
 
-    enum PublishTarget {
-        case gist       // your own GitHub account, needs gh
-        case catbox     // no install, public third-party host
-    }
-
-    private func publish(_ target: PublishTarget) {
+    private func publish() {
         publishState = .working
         let m = meeting
         let summary = app.store.summary(for: m.id)
@@ -216,29 +205,41 @@ struct MeetingDetailView: View {
         Task {
             do {
                 let html = HTMLExporter.html(meeting: m, summaryMarkdown: summary, segments: segments)
-                let url: URL
-                switch target {
-                case .gist:
-                    let (_, rendered) = try await GitHubGist.publish(
-                        html: html,
-                        filename: "meeting.html",
-                        description: "Parfait meeting notes — \(m.title)")
-                    url = rendered
-                case .catbox:
-                    url = try await CatboxPublisher.publish(html: html, filename: "meeting.html")
-                }
+                let (_, rendered) = try await GitHubGist.publish(
+                    html: html,
+                    filename: "meeting.html",
+                    description: "Parfait meeting notes — \(m.title)")
                 // Re-fetch: the upload took a while and the meeting may have been
                 // edited (merge) or deleted (then don't resurrect it) meanwhile.
                 if var fresh = app.store.meeting(id: m.id) {
-                    fresh.publishedURL = url.absoluteString
+                    fresh.publishedURL = rendered.absoluteString
                     app.store.upsert(fresh)
                 }
-                publishState = .done(url)
+                publishState = .done(rendered)
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                NSPasteboard.general.setString(rendered.absoluteString, forType: .string)
             } catch {
                 publishState = .failed(error.localizedDescription)
             }
+        }
+    }
+
+    /// No dependencies: render the page to a temp file and open it in the default
+    /// browser. Nothing is uploaded — the honest way to see the styled page (and
+    /// share the file) without gh.
+    private func previewInBrowser() {
+        let html = HTMLExporter.html(
+            meeting: meeting,
+            summaryMarkdown: app.store.summary(for: meeting.id),
+            segments: app.store.transcript(for: meeting.id))
+        let safeName = meeting.title.replacingOccurrences(of: "/", with: "-")
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Parfait — \(safeName).html")
+        do {
+            try html.data(using: .utf8)?.write(to: file)
+            NSWorkspace.shared.open(file)
+        } catch {
+            publishState = .failed(error.localizedDescription)
         }
     }
 

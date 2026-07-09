@@ -37,9 +37,9 @@ and writes a transcript with named speakers plus templated notes — without aud
 - **Chat with *all* your meetings.** Parfait ships an MCP server over your meeting library;
   the in-app "Ask your meetings" chat runs your own Claude as the agent against it — and you can
   point Claude Code or Claude Desktop at the same server.
-- **Publish** a beautiful self-contained page (notes + transcript) to a shareable URL — a secret
-  gist on your own GitHub (`gh`), or a public link with nothing to install — or just export the
-  HTML file and share it however you like.
+- **Publish** a beautiful self-contained page (notes + transcript) as a secret gist on your own
+  GitHub (`gh`), with a rendered URL to share — or preview/export the HTML locally with no
+  dependencies at all.
 - **Plain files, no database.** Every meeting is a folder of JSON + Markdown + m4a in
   `~/Library/Application Support/Parfait`. Your data is greppable, backupable, yours.
 
@@ -55,7 +55,7 @@ Parfait has no backend, no accounts, and no API keys. It composes things your Ma
 | Speaker separation | FluidAudio CoreML diarization (on device) |
 | Summaries, titles, chat | Apple Intelligence FoundationModels (on device) |
 | Long meetings, cross-meeting chat, publishing | **Your own** Claude account via the `claude` CLI |
-| Publish target | **Your own** GitHub via `gh` (secret gist), a public catbox.moe link, or a local HTML export |
+| Publish target | **Your own** GitHub via `gh` (secret gist), or a local browser preview / HTML export |
 
 ## Requirements
 
@@ -63,8 +63,8 @@ Parfait has no backend, no accounts, and no API keys. It composes things your Ma
 - **Apple Intelligence enabled** (Settings → Apple Intelligence & Siri) for on-device summaries
 - Optional: [Claude Code](https://claude.com/claude-code) (`claude` CLI, logged in) — unlocks
   cross-meeting chat and long-meeting summaries, billed to your own plan
-- Optional: [GitHub CLI](https://cli.github.com) (`gh auth login`) — to publish to your own gists
-  (without it, you can still publish a public catbox.moe link or export the HTML)
+- Optional: [GitHub CLI](https://cli.github.com) (`gh auth login`) — to publish a shareable rendered
+  URL as a gist on your own account (without it, you can still preview and export the HTML locally)
 
 ## Install
 
@@ -114,8 +114,8 @@ model; prose under a heading tells it what belongs there. Placeholders: `{{title
   your explicit request (chat, publish, or when a meeting exceeds the on-device model), on your
   own accounts.
 - Publishing is always an explicit action. "Secret" gists are unlisted (on your own account,
-  deletable); a catbox.moe link is public and lives on a third-party host; an HTML export never
-  leaves your Mac. Anyone with a published link can view that page.
+  deletable) — anyone with the link can view the page; the browser preview and HTML export never
+  leave your Mac.
 
 ## Development
 
@@ -137,7 +137,7 @@ Sources/Parfait/
   Intelligence/    AppleSummarizer · ClaudeCLI · ChatEngine · CalendarMatcher · TemplateStore
   Store/           Meeting models · file-backed archive
   MCP/             stdio MCP server (same binary, --mcp)
-  Publish/         HTMLExporter · GitHubGist · CatboxPublisher
+  Publish/         HTMLExporter · GitHubGist
   App/ UI/         AppState · pipeline · SwiftUI menu bar + windows
 ```
 

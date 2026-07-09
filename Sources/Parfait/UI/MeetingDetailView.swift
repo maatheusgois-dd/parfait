@@ -18,7 +18,7 @@ struct MeetingDetailView: View {
     enum Tab: String, CaseIterable {
         case notes = "Notes"
         case transcript = "Transcript"
-        case chat = "Chat"
+        case ask = "Ask Claude"
     }
 
     enum PublishState: Equatable {
@@ -184,8 +184,8 @@ struct MeetingDetailView: View {
             NotesTab(meeting: meeting, draft: $notesDraft)
         case .transcript:
             TranscriptTab(meeting: meeting, draft: $transcriptDraft)
-        case .chat:
-            MeetingChatView(meeting: meeting, store: app.store)
+        case .ask:
+            MeetingLauncherView(meeting: meeting)
         }
     }
 

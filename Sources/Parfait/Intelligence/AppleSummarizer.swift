@@ -99,21 +99,6 @@ enum AppleSummarizer {
         }
     }
 
-    static func answer(question: String, context: String) async throws -> String {
-        try ensureAvailable()
-        let instructions = """
-        You answer questions about a meeting using only the provided notes and transcript. \
-        Be concise. If the material doesn't contain the answer, say so.
-        """
-        let prompt = "Material:\n\(context)\n\nQuestion: \(question)"
-        do {
-            // No map-reduce here: on overflow the caller routes the question to Claude.
-            return try await respondOnce(model: transformationModel, instructions: instructions, prompt: prompt)
-        } catch {
-            throw wrap(error)
-        }
-    }
-
     // MARK: - Internals
 
     /// Relaxed guardrails for transformation tasks: meeting content is user-supplied,

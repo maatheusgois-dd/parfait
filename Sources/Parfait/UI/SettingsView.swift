@@ -186,9 +186,9 @@ private struct IntelligenceSettings: View {
                         : "Claude Code — not installed",
                     detail: claudeInstalled
                         ? (claudeLoggedIn
-                            ? "Used when a meeting is too long for the on-device model, for cross-meeting chat, and for Artifact publishing. Billed to your own Claude plan."
+                            ? "Used as a fallback when a meeting is too long for the on-device model to summarize. Billed to your own Claude plan."
                             : "Run `claude` in a terminal once to log in.")
-                        : "Install from claude.com/claude-code to unlock cross-meeting chat and long-meeting summaries.")
+                        : "Install from claude.com/claude-code to unlock long-meeting summaries when Apple Intelligence can't fit the transcript.")
                 statusRow(
                     ok: ghAvailable,
                     title: ghAvailable ? "GitHub CLI — ready" : "GitHub CLI — not found",

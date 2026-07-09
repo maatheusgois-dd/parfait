@@ -11,6 +11,7 @@ struct OnboardingView: View {
     @State private var calendarStatus = CalendarMatcher.isAuthorized
     @State private var claudeInstalled = ClaudeCLI.isInstalled
     @State private var claudeLoggedIn = false
+    @State private var claudeDesktopInstalled = ClaudeDesktop.isInstalled
     @State private var ghAvailable = false
 
     var body: some View {
@@ -30,6 +31,7 @@ struct OnboardingView: View {
                     systemAudioRow
                     calendarRow
                     claudeRow
+                    claudeDesktopRow
                     githubRow
                 }
                 .padding(.horizontal, 24)
@@ -51,6 +53,7 @@ struct OnboardingView: View {
             micStatus = MicRecorder.permissionGranted
             calendarStatus = CalendarMatcher.isAuthorized
             claudeInstalled = ClaudeCLI.isInstalled
+            claudeDesktopInstalled = ClaudeDesktop.isInstalled
             Task.detached {
                 let loggedIn = ClaudeCLI.isLoggedIn()
                 let gh = GitHubGist.isAvailable // shells out; keep off-main here
@@ -112,13 +115,29 @@ struct OnboardingView: View {
         OnboardingStepRow(
             icon: "sparkles", title: "Claude access", required: false,
             detail: claudeInstalled
-                ? (claudeLoggedIn ? "Connected — unlocks long-meeting summaries and cross-meeting chat." : "Installed but not logged in. Run `claude` in a terminal once.")
-                : "Optional — unlocks long-meeting summaries and cross-meeting chat, billed to your own Claude plan.",
+                ? (claudeLoggedIn ? "Connected — unlocks long-meeting summaries." : "Installed but not logged in. Run `claude` in a terminal once.")
+                : "Optional — unlocks long-meeting summaries, billed to your own Claude plan.",
             ok: claudeInstalled && claudeLoggedIn
         ) {
             if !claudeInstalled {
                 Button("Learn more") { NSWorkspace.shared.open(URL(string: "https://claude.com/claude-code")!) }
                     .controlSize(.small)
+            }
+        }
+    }
+
+    private var claudeDesktopRow: some View {
+        OnboardingStepRow(
+            icon: "message.badge.filled.fill", title: "Claude Desktop", required: false,
+            detail: claudeDesktopInstalled
+                ? "Installed — Chat and \"Ask your meetings\" open here. Add the parfait connector in Settings → Connect Claude if you haven't."
+                : "Required for chat — Parfait's Chat and \"Ask your meetings\" screens open a pre-filled prompt in Claude Desktop.",
+            ok: claudeDesktopInstalled
+        ) {
+            if !claudeDesktopInstalled {
+                Button("Get Claude Desktop") {
+                    NSWorkspace.shared.open(URL(string: "https://claude.ai/download")!)
+                }.controlSize(.small)
             }
         }
     }

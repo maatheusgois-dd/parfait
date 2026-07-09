@@ -32,11 +32,11 @@ and writes a transcript with named speakers plus templated notes — without aud
   editable markdown templates. Long meetings map-reduce through the model; meetings too big for
   it route to your own Claude account.
 - **Everything is editable** — title, notes, transcript, speakers.
-- **Chat with a meeting.** Ask "what did we decide?" — answered on device when it fits, by
-  Claude when it doesn't.
-- **Chat with *all* your meetings.** Parfait ships an MCP server over your meeting library;
-  the in-app "Ask your meetings" chat runs your own Claude as the agent against it — and you can
-  point Claude Code or Claude Desktop at the same server.
+- **Chat with a meeting, in Claude.** Suggested prompts or your own question open Claude
+  Desktop with this meeting loaded through Parfait's MCP connector.
+- **Chat with *all* your meetings, in Claude.** "Ask your meetings" opens Claude Desktop the
+  same way, pointed at every meeting instead of one — Parfait ships an MCP server over your
+  library, and you can point Claude Code or Claude Desktop at the same server.
 - **Publish** a beautiful self-contained page (notes + transcript) as a secret gist on your own
   GitHub (`gh`), with a rendered URL to share — or preview/export the HTML locally with no
   dependencies at all.
@@ -53,16 +53,20 @@ Parfait has no backend, no accounts, and no API keys. It composes things your Ma
 | System-audio capture | Core Audio process taps (macOS 14.4+) |
 | Transcription | SpeechAnalyzer / SpeechTranscriber (macOS 26, on device) |
 | Speaker separation | FluidAudio CoreML diarization (on device) |
-| Summaries, titles, chat | Apple Intelligence FoundationModels (on device) |
-| Long meetings, cross-meeting chat, publishing | **Your own** Claude account via the `claude` CLI |
+| Summaries, titles | Apple Intelligence FoundationModels (on device) |
+| Long meetings, publishing | **Your own** Claude account via the `claude` CLI |
+| Chat (per-meeting and cross-meeting) | **Your own** Claude Desktop, via a deep link + Parfait's MCP connector |
 | Publish target | **Your own** GitHub via `gh` (secret gist), or a local browser preview / HTML export |
 
 ## Requirements
 
 - **macOS 26 (Tahoe)** on Apple Silicon
 - **Apple Intelligence enabled** (Settings → Apple Intelligence & Siri) for on-device summaries
+- **Required for chat:** [Claude Desktop](https://claude.ai/download), with the parfait MCP
+  connector added (Settings → Connect Claude) — the Chat and "Ask your meetings" screens open
+  a pre-filled prompt there
 - Optional: [Claude Code](https://claude.com/claude-code) (`claude` CLI, logged in) — unlocks
-  cross-meeting chat and long-meeting summaries, billed to your own plan
+  long-meeting summaries, billed to your own plan
 - Optional: [GitHub CLI](https://cli.github.com) (`gh auth login`) — to publish a shareable rendered
   URL as a gist on your own account (without it, you can still preview and export the HTML locally)
 
@@ -155,7 +159,7 @@ in [docs/TESTING.md](docs/TESTING.md). Architecture and design decisions live in
 Sources/Parfait/
   Audio/           MeetingDetector · MicRecorder · SystemAudioTap · RecordingSession
   Transcription/   Transcriber (SpeechAnalyzer) · Diarizer (FluidAudio) · SpeakerLabeler
-  Intelligence/    AppleSummarizer · ClaudeCLI · ChatEngine · CalendarMatcher · TemplateStore
+  Intelligence/    AppleSummarizer · ClaudeCLI · ClaudeDesktop · CalendarMatcher · TemplateStore
   Store/           Meeting models · file-backed archive
   MCP/             stdio MCP server (same binary, --mcp)
   Publish/         HTMLExporter · GitHubGist

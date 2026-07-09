@@ -12,7 +12,6 @@ final class AppState: NSObject, ObservableObject {
 
     let store = MeetingStore()
     let templates = TemplateStore()
-    let libraryChat = LibraryChat()
 
     @Published private(set) var session: RecordingSession?
     @Published private(set) var recordingMeeting: Meeting?

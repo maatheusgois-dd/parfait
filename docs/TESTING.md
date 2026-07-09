@@ -35,9 +35,12 @@ logic (store, labeling, formatting, templates, MCP, HTML export, CLI args).
 - [ ] Switching template + Regenerate rewrites the notes
 
 ## Chat
-- [ ] Meeting → Chat answers from the transcript (On-device badge for short meetings)
-- [ ] "Ask your meetings" answers questions that require searching older meetings
-      (Claude badge; needs `claude` logged in)
+- [ ] Meeting → Ask Claude: tapping a suggestion chip opens Claude Desktop with a new chat,
+      prompt pre-filled, naming the parfait connector and this meeting's id
+- [ ] Typing a custom question + "Open in Claude" does the same with the typed text
+- [ ] "Ask your meetings" does the same, naming list_meetings/search_meetings/get_meeting
+- [ ] With Claude Desktop not installed: chips + button are disabled, a note links to
+      claude.ai/download and to Settings → Connect Claude
 
 ## Publish
 - [ ] Share → Publish to secret Gist returns a URL that renders the styled page in a browser (needs gh)

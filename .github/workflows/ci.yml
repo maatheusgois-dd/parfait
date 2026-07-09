@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-26
+    env:
+      # The image's default is Xcode 26.5; match the SDK the project targets.
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+      - run: swift --version && xcodebuild -version
+      - run: swift build
+      - run: swift test
+      # Model-dependent paths (FoundationModels, SpeechAnalyzer assets) are
+      # unavailable on hosted runners; tests cover only pure logic by design.
+      - name: Assemble app bundle
+        run: make app

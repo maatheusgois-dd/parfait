@@ -12,6 +12,7 @@ let package = Package(
             name: "Parfait",
             dependencies: [.product(name: "FluidAudio", package: "FluidAudio")],
             path: "Sources/Parfait",
+            resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(

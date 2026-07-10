@@ -9,7 +9,14 @@
 <p align="center">
 An open-source, on-device meeting notetaker for macOS — a lightweight alternative to Granola.<br>
 It lives in your menu bar, notices when a meeting starts, records both sides of the call,<br>
-and writes a transcript with named speakers plus templated notes — without audio ever leaving your Mac.
+and writes a transcript with named speakers plus templated notes — without audio ever leaving your Mac.<br>
+Then it hands any meeting to <strong>Claude</strong> through a built-in MCP server — one call, your whole
+history, or the meeting happening <em>right now</em> — with nothing uploaded.
+</p>
+
+<p align="center">
+<sub>📦 <strong>A signed <code>.app</code> download is coming soon.</strong> Until then, <code>make install</code>
+(below) builds it in about two minutes — the way to try it today.</sub>
 </p>
 
 ---
@@ -32,11 +39,17 @@ and writes a transcript with named speakers plus templated notes — without aud
   editable markdown templates. Long meetings map-reduce through the model; meetings too big for
   it route to your own Claude account.
 - **Everything is editable** — title, notes, transcript, speakers.
-- **Chat with a meeting, in Claude.** Suggested prompts or your own question open Claude
-  Desktop with this meeting loaded through Parfait's MCP connector.
-- **Chat with *all* your meetings, in Claude.** "Ask your meetings" opens Claude Desktop the
-  same way, pointed at every meeting instead of one — Parfait ships an MCP server over your
-  library, and you can point Claude Code or Claude Desktop at the same server.
+- **Ask Claude live, mid-meeting.** A floating card shows the transcript as it happens; one button
+  opens Claude on the call in progress. Parfait exposes the running transcript through a
+  `get_live_transcript` MCP tool, so Claude can answer "what did I miss?" or "what should I ask
+  next?" — no pasting, and it rides over full-screen Zoom.
+- **Chat with one meeting, natively in Claude.** Your own question (or the "Ask about this meeting"
+  screen) opens Claude Desktop with that meeting loaded through Parfait's MCP connector — Claude
+  reads it itself; nothing is copied in.
+- **Chat with *all* your meetings.** "Ask your meetings" points Claude at your whole library the
+  same way. Because Parfait ships an MCP server over your meetings, once it's connected you can skip
+  the app entirely and just ask Claude — Code or Desktop — anytime. Claude can even regenerate a
+  meeting's notes against a different template, or edit them, through the same server.
 - **Publish** a beautiful self-contained page (notes + transcript) as a secret gist on your own
   GitHub (`gh`), with a rendered **notes.parfait.to** URL to share — Parfait's own CDN serving
   your gist back rendered, not a raw-file host — or preview/export the HTML locally with no
@@ -98,9 +111,11 @@ Then from any `claude` session (or Claude Desktop with the same server):
 
 > "Search my meetings for when I last discussed hiring, and summarize what was decided."
 
-The MCP server (`Parfait --mcp`) is a thin stdio reader over the on-disk library — tools:
-`list_meetings`, `search_meetings`, `get_meeting`, `get_transcript`. Nothing leaves your Mac
-except what the model you're talking to reads through those tools.
+The MCP server (`Parfait --mcp`) speaks stdio over your on-disk library. Read tools:
+`list_meetings`, `search_meetings`, `get_meeting`, `get_transcript`, and `get_live_transcript`
+(the meeting in progress). Edit tools: `regenerate_summary`, `update_summary`, and the template
+tools (`list_templates`, `get_template`, `create_template`, `update_template`, `rename_template`,
+`delete_template`). Nothing leaves your Mac except what the model reads or writes through them.
 
 ### Claude Desktop
 
@@ -148,7 +163,7 @@ model; prose under a heading tells it what belongs there. Placeholders: `{{title
 
 ```bash
 swift build          # debug build
-swift test           # 54 unit tests (store, labeling, formatting, templates, MCP, HTML, CLI args)
+swift test           # 102 unit tests (store, labeling, formatting, templates, MCP, HTML, live transcription, Claude deep-links, CLI args)
 make app             # assemble dist/Parfait.app
 make icon            # regenerate the icon from scripts/MakeIcon.swift
 ```

@@ -372,6 +372,15 @@ final class AppState: NSObject, ObservableObject {
         notificationAuthStatus = settings.authorizationStatus
     }
 
+    /// Explicit request from onboarding / Settings. macOS shows the system dialog only while
+    /// the status is .notDetermined; once decided this just refreshes our cached status.
+    func requestNotificationAuthorization() async {
+        let center = UNUserNotificationCenter.current()
+        let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
+        log.info("notification auth (from UI) granted=\(granted)")
+        await refreshNotificationStatus()
+    }
+
     private func notifyMeetingDetected(app: String) {
         guard Bundle.main.bundleIdentifier != nil else { return }
         let content = UNMutableNotificationContent()

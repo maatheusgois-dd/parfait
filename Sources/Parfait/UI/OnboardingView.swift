@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct OnboardingView: View {
+    @EnvironmentObject private var app: AppState
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.colorScheme) private var scheme
     @AppStorage(SettingsKey.didCompleteOnboarding) private var didCompleteOnboarding = false
@@ -29,6 +30,7 @@ struct OnboardingView: View {
                 VStack(spacing: 12) {
                     micRow
                     systemAudioRow
+                    notificationsRow
                     calendarRow
                     claudeRow
                     claudeDesktopRow
@@ -54,6 +56,7 @@ struct OnboardingView: View {
             calendarStatus = CalendarMatcher.isAuthorized
             claudeInstalled = ClaudeCLI.isInstalled
             claudeDesktopInstalled = ClaudeDesktop.isInstalled
+            Task { await app.refreshNotificationStatus() }
             Task.detached {
                 let loggedIn = ClaudeCLI.isLoggedIn()
                 let gh = GitHubGist.isAvailable // shells out; keep off-main here
@@ -96,6 +99,28 @@ struct OnboardingView: View {
             Button("Open Settings") {
                 NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security")!)
             }.controlSize(.small)
+        }
+    }
+
+    private var notificationsRow: some View {
+        let status = app.notificationAuthStatus
+        return OnboardingStepRow(
+            icon: "bell.badge.fill", title: "Notifications", required: false,
+            detail: status == .denied
+                ? "Denied — the \"Record it?\" alert can't appear. Turn it on in System Settings → Notifications → Parfait."
+                : status == .authorized
+                    ? "On — Parfait can alert you to record when a meeting starts."
+                    : "Lets Parfait alert you to record when a meeting starts. Not needed if you use \"Start recording without asking\".",
+            ok: status == .authorized ? true : (status == .denied ? false : nil)
+        ) {
+            if status == .notDetermined {
+                Button("Grant…") { Task { await app.requestNotificationAuthorization() } }
+                    .controlSize(.small)
+            } else if status != .authorized {
+                Button("Open Settings") {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!)
+                }.controlSize(.small)
+            }
         }
     }
 

@@ -116,7 +116,7 @@ private struct GeneralSettings: View {
                     .controlSize(.small)
                 }
                 HStack(alignment: .firstTextBaseline) {
-                    StatusDot(ok: app.notificationAuthStatus == .authorized || app.notificationAuthStatus == .provisional
+                    StatusDot(ok: app.notificationAuthStatus == .authorized
                                ? true : (app.notificationAuthStatus == .denied ? false : nil))
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Notifications").font(.parfait(12, .medium))
@@ -125,11 +125,16 @@ private struct GeneralSettings: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Open Settings") {
-                        NSWorkspace.shared.open(URL(
-                            string: "x-apple.systempreferences:com.apple.preference.notifications")!)
+                    if app.notificationAuthStatus == .notDetermined {
+                        Button("Grant…") { Task { await app.requestNotificationAuthorization() } }
+                            .controlSize(.small)
+                    } else {
+                        Button("Open Settings") {
+                            NSWorkspace.shared.open(URL(
+                                string: "x-apple.systempreferences:com.apple.preference.notifications")!)
+                        }
+                        .controlSize(.small)
                     }
-                    .controlSize(.small)
                 }
                 .task { await app.refreshNotificationStatus() }
             }

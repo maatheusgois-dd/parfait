@@ -89,14 +89,19 @@ final class RecordingCardController {
 
     init() {
         cancellable = AppState.shared.$session
-            .removeDuplicates { $0?.meetingID == $1?.meetingID }
-            .sink { [weak self] session in self?.update(session: session) }
+            .combineLatest(AppState.shared.$recordingCardDismissed)
+            .removeDuplicates { $0.0?.meetingID == $1.0?.meetingID && $0.1 == $1.1 }
+            .sink { [weak self] session, dismissed in self?.update(session: session, dismissed: dismissed) }
     }
 
-    private func update(session: RecordingSession?) {
+    private func update(session: RecordingSession?, dismissed: Bool) {
         guard let session else {
             shownID = nil
             panel?.orderOut(nil)
+            return
+        }
+        guard !dismissed else {
+            panel?.orderOut(nil) // keep shownID so reopening reuses the same card
             return
         }
         let panel = ensurePanel()
@@ -105,6 +110,7 @@ final class RecordingCardController {
             let host = NSHostingController(rootView: RecordingCardView(
                 session: session,
                 onAsk: { _ = ClaudeDesktop.openNewChat(prompt: ClaudeDesktopPrompt.live(question: "")) },
+                onClose: { AppState.shared.recordingCardDismissed = true },
                 onStop: { Task { await AppState.shared.stopRecording() } }))
             panel.contentViewController = host
             panel.setContentSize(host.view.fittingSize)
@@ -183,6 +189,7 @@ private struct DetectionPromptView: View {
 private struct RecordingCardView: View {
     @ObservedObject var session: RecordingSession
     let onAsk: () -> Void
+    let onClose: () -> Void
     let onStop: () -> Void
     @Environment(\.colorScheme) private var scheme
 
@@ -197,6 +204,12 @@ private struct RecordingCardView: View {
                 Text(timeString(session.elapsed))
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.secondary)
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Hide this card — reopen it from the menu bar")
             }
             transcript
             HStack(spacing: 8) {

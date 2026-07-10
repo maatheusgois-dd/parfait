@@ -15,6 +15,9 @@ final class AppState: NSObject, ObservableObject {
 
     @Published private(set) var session: RecordingSession?
     @Published private(set) var recordingMeeting: Meeting?
+    /// The floating recording card is hidden because the user closed it. Reset on
+    /// each new recording; re-openable from the menu bar.
+    @Published var recordingCardDismissed = false
     /// meeting id → human-readable pipeline stage, while processing.
     @Published private(set) var processingStage: [UUID: String] = [:]
     /// A meeting-ish app started using the mic and we're waiting on the user.
@@ -231,6 +234,7 @@ final class AppState: NSObject, ObservableObject {
         meeting.notice = newSession.startupNotice
         store.upsert(meeting)
         recordingMeeting = meeting
+        recordingCardDismissed = false // a fresh recording shows the card
         session = newSession
     }
 

@@ -30,10 +30,18 @@ private struct GeneralSettings: View {
 
     @State private var micStatus = MicRecorder.permissionGranted
     @State private var calendarStatus = CalendarMatcher.isAuthorized
+    @State private var launchAtLogin = LaunchAtLogin.isOn
 
     var body: some View {
         Form {
             Section("Setup") {
+                Toggle("Launch Parfait at login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { applyLaunchAtLogin() }
+                Text(LaunchAtLogin.requiresApproval
+                     ? "Approve Parfait under System Settings → General → Login Items to finish enabling this."
+                     : "Starts Parfait in the menu bar automatically when you log in.")
+                    .font(.parfait(11))
+                    .foregroundStyle(.secondary)
                 Button("Run setup walkthrough again") { openWindow(id: "onboarding") }
                     .buttonStyle(.plain)
                     .font(.parfait(12))
@@ -143,7 +151,13 @@ private struct GeneralSettings: View {
         .onAppear {
             micStatus = MicRecorder.permissionGranted
             calendarStatus = CalendarMatcher.isAuthorized
+            launchAtLogin = LaunchAtLogin.isOn
         }
+    }
+
+    private func applyLaunchAtLogin() {
+        try? LaunchAtLogin.set(launchAtLogin)
+        launchAtLogin = LaunchAtLogin.isOn // reflect what actually took effect
     }
 
     private func permissionRow(

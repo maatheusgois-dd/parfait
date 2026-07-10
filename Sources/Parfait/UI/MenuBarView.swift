@@ -173,6 +173,16 @@ private struct RecordingCard: View {
                 .buttonStyle(.bordered)
                 .help("Discard this recording")
             }
+            if app.recordingCardDismissed {
+                Button {
+                    app.recordingCardDismissed = false
+                } label: {
+                    Label("Show live transcript card", systemImage: "rectangle.on.rectangle")
+                        .font(.parfait(11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.blueberry)
+            }
         }
         .cardStyle()
     }

@@ -129,6 +129,15 @@ final class MCPServer {
             ] as [String: Any],
         ],
         [
+            "name": "get_live_transcript",
+            "description": "Get the transcript of the meeting happening RIGHT NOW, as far as it has been transcribed. Use this to answer questions during a live, in-progress meeting. The text is a real-time approximation — it may lag a few seconds behind and isn't final. Says so plainly if no meeting is currently being recorded.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [:] as [String: Any],
+                "additionalProperties": false,
+            ] as [String: Any],
+        ],
+        [
             "name": "list_templates",
             "description": "List the user's summary templates by name, with each one's heading outline (## sections). Templates are the markdown skeletons Parfait fills in to summarize a meeting.",
             "inputSchema": [
@@ -249,6 +258,9 @@ final class MCPServer {
             return "# \(meeting.title)\n\n"
                 + TranscriptFormatter.plainText(segments, speakers: meeting.speakers)
 
+        case "get_live_transcript":
+            return Self.liveTranscriptText(archive: archive)
+
         case "list_templates":
             let all = templates.list()
             if all.isEmpty { return "No templates yet." }
@@ -332,6 +344,28 @@ final class MCPServer {
         var line = "[\(m.id.uuidString)] \(m.title) — \(df.string(from: m.createdAt))"
         if m.duration > 0 { line += " (\(TemplateRenderer.duration(m.duration)))" }
         return line
+    }
+
+    /// The in-progress meeting is the one still in `.recording` state. A crash-orphaned
+    /// meeting (state stuck at `.recording` until the next launch's `finalizeOrphans`)
+    /// is guarded out by requiring a recently-modified `live.json`. Static +
+    /// archive-injected so it's unit-testable.
+    static func liveTranscriptText(archive: MeetingArchive, now: Date = Date()) -> String {
+        guard let meeting = archive.allMeetings().first(where: { $0.state == .recording }),
+              let modified = archive.liveTranscriptModified(for: meeting.id),
+              now.timeIntervalSince(modified) < 60
+        else { return "No meeting is being recorded right now." }
+        let segments = archive.liveTranscript(for: meeting.id)
+        guard !segments.isEmpty else {
+            return "A meeting is being recorded (\"\(meeting.title)\"), but nothing has been transcribed yet."
+        }
+        let body = TranscriptFormatter.plainText(segments, speakers: LiveTranscriber.speakers)
+        return """
+        Live transcript of the meeting in progress — "\(meeting.title)". This is a real-time \
+        approximation (it may lag a few seconds behind and isn't final).
+
+        \(body)
+        """
     }
 
     // MARK: - JSON-RPC plumbing

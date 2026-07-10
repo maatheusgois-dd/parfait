@@ -218,7 +218,7 @@ final class AppState: NSObject, ObservableObject {
             return
         }
 
-        let newSession = RecordingSession(meetingID: meeting.id)
+        let newSession = RecordingSession(meetingID: meeting.id, archive: archive)
         do {
             try newSession.start(
                 micURL: archive.micURL(for: meeting.id),
@@ -285,6 +285,8 @@ final class AppState: NSObject, ObservableObject {
             Task { @MainActor in AppState.shared.processingStage[id] = stage }
         }
         processingStage[id] = nil
+        // The durable transcript now supersedes the live one (if any was written).
+        store.archive.removeLiveTranscript(for: id)
 
         // Merge only pipeline-owned fields onto the CURRENT meeting; nil means
         // it was deleted mid-run — let it stay deleted.

@@ -73,6 +73,18 @@ enum ClaudeDesktopPrompt {
         \(q.isEmpty ? defaultLibraryQuestion : q)
         """
     }
+
+    /// For the "Ask Claude live" button during a recording. Steers Claude to the
+    /// live-transcript tool (the meeting isn't saved yet, so there's no id to pass).
+    static func live(question: String) -> String {
+        let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        return """
+        I'm in a Parfait meeting happening right now — use the "parfait" connector's \
+        get_live_transcript tool to see what's been said so far.
+
+        \(q.isEmpty ? "What's being discussed, and is there anything I should add or ask?" : q)
+        """
+    }
 }
 
 /// Deep-link launcher for a Claude Code session (claude://code/new). Unlike

@@ -10,11 +10,19 @@ final class RecordingSession: ObservableObject {
 
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var micLevel: Float = 0
+    /// Rolling live transcript (finalized segments) + the current in-progress
+    /// fragment, updated in real time while recording. A convenience surface — the
+    /// accurate, diarized transcript is still produced post-hoc by the batch pipeline.
+    @Published private(set) var liveSegments: [TranscriptSegment] = []
+    @Published private(set) var volatileText: String = ""
     private(set) var micStarted = false
     private(set) var systemStarted = false
 
     private let mic = MicRecorder()
     private let tap = SystemAudioTap()
+    private let archive: MeetingArchive
+    private var liveTranscriber: LiveTranscriber?
+    private var lastLivePersist = Date.distantPast
     private var ticker: Timer?
 
     enum SessionError: LocalizedError {
@@ -27,16 +35,27 @@ final class RecordingSession: ObservableObject {
         }
     }
 
-    init(meetingID: UUID) {
+    init(meetingID: UUID, archive: MeetingArchive) {
         self.meetingID = meetingID
+        self.archive = archive
     }
 
     func start(micURL: URL, systemURL: URL) throws {
         var problems: [String] = []
 
+        // Live transcription runs alongside capture. Set the buffer sinks BEFORE
+        // starting the recorders so no early audio is missed; it's best-effort —
+        // any failure here never affects the recording itself.
+        let live = LiveTranscriber(startDate: startedAt)
+        live.onUpdate = { [weak self] segments, volatile in
+            Task { @MainActor in self?.applyLive(segments, volatile) }
+        }
+        liveTranscriber = live
+
         mic.levelHandler = { [weak self] level in
             Task { @MainActor in self?.micLevel = level }
         }
+        mic.bufferSink = { [weak live] buffer in live?.feedMic(buffer) }
         do {
             try mic.start(writingTo: micURL)
             micStarted = true
@@ -44,6 +63,7 @@ final class RecordingSession: ObservableObject {
             problems.append("microphone: \(error.localizedDescription)")
         }
         tap.signalDetectedHandler = { AppSettings.markSystemAudioConfirmed() }
+        tap.bufferSink = { [weak live] buffer in live?.feedSystem(buffer) }
         do {
             try tap.start(writingTo: systemURL)
             systemStarted = true
@@ -54,11 +74,27 @@ final class RecordingSession: ObservableObject {
             throw SessionError.nothingStarted(problems.joined(separator: "; "))
         }
 
+        // Model/asset setup is async; buffers fed before it's ready are dropped.
+        Task { try? await live.start(locale: .current) }
+
         ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 self.elapsed = Date().timeIntervalSince(self.startedAt)
             }
+        }
+    }
+
+    /// Applies a live-transcript update on the main actor: refreshes the observable
+    /// state and persists to live.json at most every ~1.5 s (throttled so the MCP
+    /// process sees a fresh file without thrashing the disk).
+    private func applyLive(_ segments: [TranscriptSegment], _ volatile: String) {
+        liveSegments = segments
+        volatileText = volatile
+        let now = Date()
+        if now.timeIntervalSince(lastLivePersist) >= 1.5 {
+            lastLivePersist = now
+            archive.saveLiveTranscript(segments, for: meetingID)
         }
     }
 
@@ -77,5 +113,15 @@ final class RecordingSession: ObservableObject {
         ticker = nil
         if micStarted { mic.stop() }
         if systemStarted { tap.stop() }
+        if let live = liveTranscriber {
+            liveTranscriber = nil
+            // This Task inherits the main actor. After the transcribers finalize,
+            // flush the last live.json; the pipeline removes it once the durable
+            // transcript.json lands.
+            Task {
+                await live.stop()
+                archive.saveLiveTranscript(liveSegments, for: meetingID)
+            }
+        }
     }
 }

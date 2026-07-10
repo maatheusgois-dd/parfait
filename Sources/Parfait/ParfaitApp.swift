@@ -55,12 +55,17 @@ struct ParfaitApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowObservers: [NSObjectProtocol] = []
     private var detectionPrompt: DetectionPromptController?
+    private var recordingCard: RecordingCardController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in AppState.shared.bootstrap() }
         observeWindowsForMenuBar()
-        // The floating "Record this meeting?" card that auto-appears on detection.
-        MainActor.assumeIsolated { detectionPrompt = DetectionPromptController() }
+        // The floating "Record this meeting?" card on detection, and the live
+        // recording card (transcript + Ask Claude live) while recording.
+        MainActor.assumeIsolated {
+            detectionPrompt = DetectionPromptController()
+            recordingCard = RecordingCardController()
+        }
     }
 
     /// .accessory apps (LSUIElement) have no Dock icon *and no menu bar at all* —

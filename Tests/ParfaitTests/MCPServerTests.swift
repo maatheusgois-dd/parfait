@@ -81,9 +81,9 @@ final class MCPServerTests: XCTestCase {
         let tools = (resp["result"] as! [String: Any])["tools"] as! [[String: Any]]
         let names = tools.map { $0["name"] as! String }.sorted()
         XCTAssertEqual(names, [
-            "create_template", "delete_template", "get_meeting", "get_template",
-            "get_transcript", "list_meetings", "list_templates", "rename_template",
-            "search_meetings", "update_template",
+            "create_template", "delete_template", "get_live_transcript", "get_meeting",
+            "get_template", "get_transcript", "list_meetings", "list_templates",
+            "rename_template", "search_meetings", "update_template",
         ])
         for tool in tools {
             XCTAssertNotNil(tool["description"])
@@ -245,5 +245,54 @@ final class MCPServerTests: XCTestCase {
         let result = resp["result"] as! [String: Any]
         XCTAssertEqual(result["isError"] as? Bool, false)
         XCTAssertEqual(templates.template(named: "interview")?.name, "interview")
+    }
+
+    // MARK: - get_live_transcript
+
+    private func startRecordingMeeting(
+        title: String, live segments: [TranscriptSegment]
+    ) throws -> Meeting {
+        var m = Meeting(title: title, createdAt: Date())
+        m.state = .recording
+        try archive.createFolder(for: m.id)
+        try archive.save(m)
+        archive.saveLiveTranscript(segments, for: m.id)
+        return m
+    }
+
+    func testLiveTranscriptWhenNothingRecording() {
+        // setUp's fixture meeting is .ready, not .recording.
+        XCTAssertEqual(
+            MCPServer.liveTranscriptText(archive: archive),
+            "No meeting is being recorded right now.")
+    }
+
+    func testLiveTranscriptReturnsInProgressMeeting() throws {
+        _ = try startRecordingMeeting(title: "Standup", live: [
+            TranscriptSegment(speakerID: LiveTranscriber.youSpeakerID, start: 1, end: 1, text: "Morning everyone."),
+            TranscriptSegment(speakerID: LiveTranscriber.othersSpeakerID, start: 3, end: 3, text: "Hi, ready to start."),
+        ])
+        let text = MCPServer.liveTranscriptText(archive: archive)
+        XCTAssertTrue(text.contains("Standup"))
+        XCTAssertTrue(text.contains("You @"))
+        XCTAssertTrue(text.contains("Morning everyone."))
+        XCTAssertTrue(text.contains("Others @"))
+        XCTAssertTrue(text.contains("real-time approximation"))
+    }
+
+    func testLiveTranscriptRecordingButEmpty() throws {
+        _ = try startRecordingMeeting(title: "Quiet", live: [])
+        XCTAssertTrue(
+            MCPServer.liveTranscriptText(archive: archive).contains("nothing has been transcribed yet"))
+    }
+
+    func testLiveTranscriptStaleFileIgnored() throws {
+        _ = try startRecordingMeeting(title: "Orphan", live: [
+            TranscriptSegment(speakerID: LiveTranscriber.youSpeakerID, start: 0, end: 0, text: "hello"),
+        ])
+        // A crash-orphaned .recording meeting: live.json older than 60s isn't "live".
+        XCTAssertEqual(
+            MCPServer.liveTranscriptText(archive: archive, now: Date().addingTimeInterval(120)),
+            "No meeting is being recorded right now.")
     }
 }

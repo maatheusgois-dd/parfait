@@ -56,6 +56,11 @@ final class SystemAudioTap: @unchecked Sendable {
     /// same IO path with zeroed buffers). Assign before start(). (ioQueue only after that.)
     var signalDetectedHandler: (@Sendable () -> Void)?
     private var didSignalSuccess = false
+
+    /// Fork of each captured buffer for live transcription. Assign before start().
+    /// The sink deep-copies immediately — the buffer is only valid during this
+    /// IO callback. (ioQueue after start; set once before start, like the handler above.)
+    var bufferSink: (@Sendable (AVAudioPCMBuffer) -> Void)?
     private static let ticksPerSecond: Double = {
         var info = mach_timebase_info_data_t()
         mach_timebase_info(&info)
@@ -251,6 +256,9 @@ final class SystemAudioTap: @unchecked Sendable {
               let input = AVAudioPCMBuffer(pcmFormat: format, bufferListNoCopy: list, deallocator: nil),
               input.frameLength > 0
         else { return }
+
+        // Fork to the live transcriber (it deep-copies before this callback returns).
+        bufferSink?(input)
 
         // Proof of the TCC grant: real audio (even a quiet room) isn't exact digital zero,
         // whereas a denied grant hands back all-zero buffers on this same path.

@@ -131,6 +131,40 @@ final class MeetingArchive: @unchecked Sendable {
         }
     }
 
+    // MARK: - Live transcript (present only while a meeting is recording)
+
+    func liveTranscriptURL(for id: UUID) -> URL {
+        folder(for: id).appendingPathComponent("live.json")
+    }
+
+    /// Best-effort atomic write of the rolling transcript. Silently no-ops if the
+    /// meeting folder is gone (discarded mid-recording).
+    func saveLiveTranscript(_ segments: [TranscriptSegment], for id: UUID) {
+        queue.sync {
+            guard let data = try? encoder.encode(segments) else { return }
+            try? data.write(to: liveTranscriptURL(for: id), options: .atomic)
+        }
+    }
+
+    func liveTranscript(for id: UUID) -> [TranscriptSegment] {
+        queue.sync {
+            guard let data = try? Data(contentsOf: liveTranscriptURL(for: id)) else { return [] }
+            return (try? decoder.decode([TranscriptSegment].self, from: data)) ?? []
+        }
+    }
+
+    /// Last-modified time of the live transcript, for the MCP freshness guard.
+    func liveTranscriptModified(for id: UUID) -> Date? {
+        queue.sync {
+            try? FileManager.default
+                .attributesOfItem(atPath: liveTranscriptURL(for: id).path)[.modificationDate] as? Date
+        }
+    }
+
+    func removeLiveTranscript(for id: UUID) {
+        queue.sync { try? FileManager.default.removeItem(at: liveTranscriptURL(for: id)) }
+    }
+
     // MARK: - Summary
 
     func summary(for id: UUID) -> String {

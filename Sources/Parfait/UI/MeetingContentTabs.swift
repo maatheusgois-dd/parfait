@@ -99,6 +99,14 @@ struct TranscriptTab: View {
     private var segments: [TranscriptSegment] { app.store.transcript(for: meeting.id) }
 
     var body: some View {
+        if let session = app.session, session.meetingID == meeting.id {
+            LiveTranscriptView(session: session)
+        } else {
+            savedTranscript
+        }
+    }
+
+    private var savedTranscript: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(segments.isEmpty ? "" : "\(segments.count) segments")
@@ -263,5 +271,62 @@ struct TranscriptTab: View {
             app.store.upsert(fresh)
         }
         draft = nil
+    }
+}
+
+/// Read-only live transcript shown in the Transcript tab while a meeting is being
+/// recorded (and mirrored by the floating recording card). Observes the session so
+/// it updates in real time; the accurate, diarized transcript replaces it once
+/// processing finishes.
+struct LiveTranscriptView: View {
+    @ObservedObject var session: RecordingSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                RecordDot()
+                Text("Live — transcribing as the meeting happens. The final, more accurate transcript is created when you stop.")
+                    .font(.parfait(11))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+
+            if session.liveSegments.isEmpty, session.volatileText.isEmpty {
+                EmptyStateView(
+                    title: "Listening…",
+                    message: "The live transcript appears here as people speak.")
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 14) {
+                            ForEach(LiveTranscriber.turns(from: session.liveSegments)) { turn in
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(LiveTranscriber.name(for: turn.speakerID))
+                                        .font(.parfait(12, .bold))
+                                        .foregroundStyle(turn.speakerID == LiveTranscriber.youSpeakerID
+                                                         ? Theme.blueberry : Theme.raspberry)
+                                    Text(turn.text)
+                                        .font(.parfait(13))
+                                        .textSelection(.enabled)
+                                        .lineSpacing(2)
+                                }
+                            }
+                            if !session.volatileText.isEmpty {
+                                Text(session.volatileText)
+                                    .font(.parfait(13))
+                                    .foregroundStyle(.secondary)
+                                    .italic()
+                            }
+                            Color.clear.frame(height: 1).id("live-bottom")
+                        }
+                        .frame(maxWidth: 660, alignment: .leading)
+                        .padding(20)
+                    }
+                    .onChange(of: session.liveSegments.count) { proxy.scrollTo("live-bottom", anchor: .bottom) }
+                    .onChange(of: session.volatileText) { proxy.scrollTo("live-bottom", anchor: .bottom) }
+                }
+            }
+        }
     }
 }

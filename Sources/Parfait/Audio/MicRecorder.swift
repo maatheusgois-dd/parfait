@@ -19,6 +19,13 @@ final class MicRecorder: @unchecked Sendable {
         set { lock.lock(); defer { lock.unlock() }; _levelHandler = newValue }
     }
 
+    /// Fork of each captured buffer for live transcription. The sink deep-copies
+    /// immediately — the buffer here is only valid during the tap callback.
+    var bufferSink: (@Sendable (AVAudioPCMBuffer) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return _bufferSink }
+        set { lock.lock(); defer { lock.unlock() }; _bufferSink = newValue }
+    }
+
     static var permissionGranted: Bool {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
@@ -30,6 +37,7 @@ final class MicRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private let restartQueue = DispatchQueue(label: "parfait.mic-recorder.restart")
     private var _levelHandler: (@Sendable (Float) -> Void)?
+    private var _bufferSink: (@Sendable (AVAudioPCMBuffer) -> Void)?
     private var engine: AVAudioEngine?
     private var file: AVAudioFile?
     private var converter: AVAudioConverter?
@@ -149,12 +157,15 @@ final class MicRecorder: @unchecked Sendable {
 
     private func process(_ buffer: AVAudioPCMBuffer) {
         var emit: (@Sendable (Float) -> Void, Float)?
+        var sink: (@Sendable (AVAudioPCMBuffer) -> Void)?
         lock.lock()
         writeLocked(buffer)
         if let level = meterLocked(buffer), let handler = _levelHandler {
             emit = (handler, level)
         }
+        sink = _bufferSink
         lock.unlock()
+        sink?(buffer)
         if let (handler, level) = emit {
             handler(level)
         }

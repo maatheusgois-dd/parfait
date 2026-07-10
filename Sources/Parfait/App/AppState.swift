@@ -30,7 +30,16 @@ final class AppState: NSObject, ObservableObject {
     var activeMicAppNames: [String] { Array(Set(activeMicApps.values)).sorted() }
 
     private let detector = MeetingDetector()
+    /// The detection currently surfaced to the user (menu-bar glyph + banner + notification).
     private var pendingDetection: MicEvent?
+    /// Every mic app detected but not yet decided, keyed by pid. When the surfaced app releases,
+    /// the next entry is promoted so a still-live meeting keeps prompting — the detector only
+    /// emits on transitions, so an already-running app never re-announces itself.
+    private var pendingDetections: [pid_t: MicEvent] = [:]
+    /// Last time we announced (notification + chime) a detection per pid, to suppress a repeat
+    /// announce on a quick mic reconnect while still allowing a genuinely new later meeting.
+    private var lastDetectionAnnounce: [pid_t: ContinuousClock.Instant] = [:]
+    private static let announceCooldown: Duration = .seconds(15)
     private var pendingAutoStop: Task<Void, Never>?
     /// Retains the detection chime while it plays — a temporary NSSound can be
     /// deallocated mid-play. Replaced on each detection.
@@ -93,6 +102,8 @@ final class AppState: NSObject, ObservableObject {
         detector.stop()
         detectedAppName = nil
         pendingDetection = nil
+        pendingDetections.removeAll()
+        lastDetectionAnnounce.removeAll()
         // detector.stop() drops its listeners without emitting closing false events,
         // so any still-running pid would linger here and permanently block auto-stop.
         activeMicApps.removeAll()
@@ -114,15 +125,31 @@ final class AppState: NSObject, ObservableObject {
             if AppSettings.autoRecord {
                 Task { await startRecording(sourceApp: name, trigger: event) }
             } else {
+                // A mic reconnect blip (drop + re-grab, which the auto-stop path below also
+                // debounces) shouldn't re-fire the notification + chime for a meeting we just
+                // announced. Still re-surface the prompt visually; only gate the announce.
+                let now = ContinuousClock.now
+                let recentlyAnnounced = lastDetectionAnnounce[event.pid]
+                    .map { now - $0 < Self.announceCooldown } ?? false
+                lastDetectionAnnounce[event.pid] = now
+                pendingDetections[event.pid] = event
                 detectedAppName = name
                 pendingDetection = event
-                notifyMeetingDetected(app: name)
+                if !recentlyAnnounced { notifyMeetingDetected(app: name) }
             }
         } else {
             activeMicApps.removeValue(forKey: event.pid)
+            pendingDetections.removeValue(forKey: event.pid)
             if !isRecording, event.pid == pendingDetection?.pid {
-                detectedAppName = nil
-                pendingDetection = nil
+                // The app we were prompting for released. Surface the next still-undecided app so
+                // an ongoing meeting keeps prompting instead of the prompt vanishing for good.
+                if let next = pendingDetections.values.first {
+                    detectedAppName = MeetingDetector.displayName(for: next)
+                    pendingDetection = next
+                } else {
+                    detectedAppName = nil
+                    pendingDetection = nil
+                }
             }
             // All detected mic apps quiet — debounced (apps drop and re-grab
             // during reconnects) — before treating the meeting as over. Applies
@@ -162,6 +189,7 @@ final class AppState: NSObject, ObservableObject {
         pendingAutoStop = nil
         detectedAppName = nil
         pendingDetection = nil
+        pendingDetections.removeAll() // one recording covers the whole meeting, whatever grabbed the mic
         lastError = nil
 
         if !MicRecorder.permissionGranted {
@@ -236,8 +264,11 @@ final class AppState: NSObject, ObservableObject {
     }
 
     func dismissDetection() {
+        // Declining means "don't record this meeting" — drop every undecided app so a second
+        // one (a browser tab alongside Zoom) doesn't immediately re-prompt.
         detectedAppName = nil
         pendingDetection = nil
+        pendingDetections.removeAll()
     }
 
     // MARK: - Processing

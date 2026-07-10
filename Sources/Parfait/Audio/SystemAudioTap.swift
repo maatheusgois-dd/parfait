@@ -153,7 +153,7 @@ final class SystemAudioTap: @unchecked Sendable {
 
         let outputUID = try Self.defaultOutputDeviceUID()
         let composition: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "Parfait Tap Aggregate",
+            kAudioAggregateDeviceNameKey: Self.aggregateName(pid: getpid()),
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
             kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             kAudioAggregateDeviceIsPrivateKey: true,
@@ -331,11 +331,19 @@ final class SystemAudioTap: @unchecked Sendable {
 
     // MARK: - Orphan cleanup
 
-    /// Destroys any "Parfait Tap Aggregate" device left behind by a previous process that
-    /// crashed or was force-killed (SIGKILL) mid-recording — graceful termination tears its
-    /// own down via stop(). A leaked aggregate keeps its tap running, so macOS shows the
-    /// "System Audio Recording" indicator with nothing recording. Best-effort; call once at
-    /// launch, before any recording starts, so the only match is a genuine leftover.
+    private static let aggregateNamePrefix = "Parfait Tap Aggregate"
+    /// The aggregate name carries its creating pid so a later launch can tell a genuine orphan
+    /// (creator process dead) from a live sibling instance's device (creator alive). There is NO
+    /// single-instance enforcement in this app, and AudioHardwareDestroyAggregateDevice isn't
+    /// scoped to the creating process — matching the bare name alone would let one instance
+    /// destroy another's live recording, or a user's identically-named Audio MIDI Setup device.
+    private static func aggregateName(pid: pid_t) -> String { "\(aggregateNamePrefix) (pid \(pid))" }
+
+    /// Destroys any Parfait tap aggregate left behind by a previous process that crashed or was
+    /// force-killed (SIGKILL) mid-recording — graceful termination tears its own down via stop().
+    /// A leaked aggregate keeps its tap running, so macOS shows the "System Audio Recording"
+    /// indicator with nothing recording. Best-effort; safe to call any time (never touches a
+    /// device whose creator is still alive).
     static func destroyLeftoverAggregates() {
         var addr = address(kAudioHardwarePropertyDevices)
         var size: UInt32 = 0
@@ -352,19 +360,47 @@ final class SystemAudioTap: @unchecked Sendable {
         }
     }
 
+    /// True only for an aggregate this app created (name prefix + embedded pid) whose creating
+    /// process is no longer alive — never our own, never a live sibling's, never a user device.
     private static func isLeftoverAggregate(_ device: AudioObjectID) -> Bool {
-        var transportAddr = address(kAudioDevicePropertyTransportType)
+        guard deviceTransport(device) == kAudioDeviceTransportTypeAggregate,
+              let name = deviceName(device),
+              let pid = creatorPID(fromName: name),
+              pid != getpid()
+        else { return false }
+        return !processIsAlive(pid)
+    }
+
+    private static func creatorPID(fromName name: String) -> pid_t? {
+        let prefix = aggregateNamePrefix + " (pid "
+        guard name.hasPrefix(prefix), name.hasSuffix(")") else { return nil }
+        return pid_t(name.dropFirst(prefix.count).dropLast())
+    }
+
+    /// A signal-0 kill probes existence without delivering anything: 0 = alive; EPERM = alive
+    /// (exists, not ours to signal); ESRCH = no such process. Only ESRCH counts as dead, so a
+    /// transient/permission error never green-lights destroying a live device.
+    private static func processIsAlive(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    private static func deviceTransport(_ device: AudioObjectID) -> UInt32? {
+        var addr = address(kAudioDevicePropertyTransportType)
         var transport: UInt32 = 0
-        var tSize = UInt32(MemoryLayout<UInt32>.stride)
-        guard AudioObjectGetPropertyData(device, &transportAddr, 0, nil, &tSize, &transport) == noErr,
-              transport == kAudioDeviceTransportTypeAggregate else { return false }
-        var nameAddr = address(kAudioObjectPropertyName)
+        var size = UInt32(MemoryLayout<UInt32>.stride)
+        guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &transport) == noErr
+        else { return nil }
+        return transport
+    }
+
+    private static func deviceName(_ device: AudioObjectID) -> String? {
+        var addr = address(kAudioObjectPropertyName)
         var name: CFString = "" as CFString
-        var nSize = UInt32(MemoryLayout<CFString>.stride)
+        var size = UInt32(MemoryLayout<CFString>.stride)
         let ok = withUnsafeMutablePointer(to: &name) { pointer in
-            AudioObjectGetPropertyData(device, &nameAddr, 0, nil, &nSize, pointer) == noErr
+            AudioObjectGetPropertyData(device, &addr, 0, nil, &size, pointer) == noErr
         }
-        return ok && (name as String) == "Parfait Tap Aggregate"
+        return ok ? (name as String) : nil
     }
 
     // MARK: - HAL helpers

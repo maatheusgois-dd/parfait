@@ -205,7 +205,11 @@ final class AppState: NSObject, ObservableObject {
         var fresh = store.meeting(id: meeting.id) ?? meeting
         fresh.duration = session.elapsed
         store.upsert(fresh)
-        await process(fresh)
+        // Detached on purpose: an auto-stop runs *inside* the pendingAutoStop task, which
+        // clearRecordingState() just cancelled — awaiting process() here would run the whole
+        // transcription pipeline in a cancelled task and every await would throw
+        // CancellationError. A fresh task keeps processing independent of how we stopped.
+        Task { await self.process(fresh) }
     }
 
     func discardRecording() {

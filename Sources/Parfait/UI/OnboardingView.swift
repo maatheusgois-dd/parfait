@@ -107,10 +107,10 @@ struct OnboardingView: View {
         return OnboardingStepRow(
             icon: "bell.badge.fill", title: "Notifications", required: false,
             detail: status == .denied
-                ? "Denied — the \"Record it?\" alert can't appear. Turn it on in System Settings → Notifications → Parfait."
+                ? "Denied — Parfait can't tell you when your notes are ready. Turn it on in System Settings → Notifications → Parfait."
                 : status == .authorized
-                    ? "On — Parfait can alert you to record when a meeting starts."
-                    : "Lets Parfait alert you to record when a meeting starts. Not needed if you use \"Start recording without asking\".",
+                    ? "On — Parfait will let you know when your meeting notes are ready."
+                    : "Lets Parfait notify you when a recording finishes processing and your notes are ready.",
             ok: status == .authorized ? true : (status == .denied ? false : nil)
         ) {
             if status == .notDetermined {

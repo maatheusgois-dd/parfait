@@ -120,7 +120,7 @@ private struct GeneralSettings: View {
                                ? true : (app.notificationAuthStatus == .denied ? false : nil))
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Notifications").font(.parfait(12, .medium))
-                        Text("Needed for the \"Record it?\" alert when a meeting is detected. Without it, check the menu bar.")
+                        Text("Lets Parfait notify you when a recording finishes processing and your notes are ready.")
                             .font(.parfait(11))
                             .foregroundStyle(.secondary)
                     }

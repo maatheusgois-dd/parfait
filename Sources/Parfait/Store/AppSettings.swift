@@ -3,7 +3,7 @@ import SwiftUI
 
 /// UserDefaults-backed settings. Keys are shared with @AppStorage in Settings UI.
 enum SettingsKey {
-    static let autoRecord = "autoRecord"                    // start recording on detection (vs. just notify)
+    static let autoRecord = "autoRecord"                    // start recording on detection (vs. just show the prompt card)
     static let detectMeetings = "detectMeetings"            // watch for mic activity at all
     static let identifySpeakers = "identifySpeakers"        // run on-device diarization
     static let useCalendar = "useCalendar"                  // match calendar events for titles/attendees

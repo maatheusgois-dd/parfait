@@ -49,14 +49,12 @@ final class ClaudeDesktopTests: XCTestCase {
         XCTAssertEqual(url?.query, "q=")
     }
 
-    func testMeetingPromptNamesConnectorToolsAndMeeting() {
+    func testMeetingPromptCarriesTitleIdAndQuestion() {
         let id = UUID()
         let prompt = ClaudeDesktopPrompt.meeting(id: id, title: "Roadmap sync", question: "What did we decide?")
-        XCTAssertTrue(prompt.contains("parfait"))
-        XCTAssertTrue(prompt.contains("get_meeting"))
-        XCTAssertTrue(prompt.contains("get_transcript"))
-        XCTAssertTrue(prompt.contains(id.uuidString))
+        XCTAssertTrue(prompt.contains("Parfait meeting"))
         XCTAssertTrue(prompt.contains("Roadmap sync"))
+        XCTAssertTrue(prompt.contains(id.uuidString))
         XCTAssertTrue(prompt.contains("What did we decide?"))
     }
 

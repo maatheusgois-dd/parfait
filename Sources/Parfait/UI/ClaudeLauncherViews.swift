@@ -7,20 +7,12 @@ struct MeetingLauncherView: View {
         ClaudeLauncherView(
             title: "Ask about this meeting",
             subtitle: "Ask Claude about this meeting through the parfait connector.",
-            suggestions: [
-                "What did we decide?",
-                "List every action item with owners",
-                "What did \(firstOtherSpeaker) say about timelines?",
-            ],
+            suggestions: [],
             promptBuilder: { question in
                 ClaudeDesktopPrompt.meeting(
                     id: meeting.id, title: meeting.title, question: question)
             }
         )
-    }
-
-    private var firstOtherSpeaker: String {
-        meeting.speakers.first { !$0.isMe }?.name ?? "Speaker 1"
     }
 }
 

@@ -138,6 +138,30 @@ final class MCPServer {
             ] as [String: Any],
         ],
         [
+            "name": "update_summary",
+            "description": "Replace a meeting's notes (its summary) with new Markdown text, by id. Use this to save edits to the notes; it overwrites the current notes in full.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string", "description": "Meeting UUID"],
+                    "content": ["type": "string", "description": "New notes as Markdown, replacing the current notes in full"],
+                ],
+                "required": ["id", "content"],
+            ] as [String: Any],
+        ],
+        [
+            "name": "regenerate_summary",
+            "description": "Re-summarize a meeting from its transcript, by id, using the on-device model (falling back to the user's Claude account for long meetings). Optionally switch the template first. Returns the new notes. Fails if the meeting has no transcript yet.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string", "description": "Meeting UUID"],
+                    "template": ["type": "string", "description": "Optional template name to summarize with (see list_templates). Defaults to the meeting's current template."],
+                ],
+                "required": ["id"],
+            ] as [String: Any],
+        ],
+        [
             "name": "list_templates",
             "description": "List the user's summary templates by name, with each one's heading outline (## sections). Templates are the markdown skeletons Parfait fills in to summarize a meeting.",
             "inputSchema": [
@@ -261,6 +285,17 @@ final class MCPServer {
         case "get_live_transcript":
             return Self.liveTranscriptText(archive: archive)
 
+        case "update_summary":
+            let meeting = try meetingArg(arguments)
+            guard let content = arguments["content"] as? String else {
+                throw ToolError.badArgument("'content' is required")
+            }
+            try archive.saveSummary(content, for: meeting.id)
+            return "Updated the notes for \"\(meeting.title)\"."
+
+        case "regenerate_summary":
+            return try regenerateSummary(meeting: try meetingArg(arguments), arguments: arguments)
+
         case "list_templates":
             let all = templates.list()
             if all.isEmpty { return "No templates yet." }
@@ -327,6 +362,55 @@ final class MCPServer {
         }
         guard let template = templates.template(named: name) else { throw ToolError.templateNotFound(name) }
         return template
+    }
+
+    /// Re-summarizes a meeting from its transcript, optionally switching template first.
+    /// The MCP request loop is synchronous, so the async summarizer is bridged with
+    /// `blockingAwait` — the tool call blocks until the notes are ready, which is the
+    /// behavior Claude expects from a request/response tool.
+    private func regenerateSummary(meeting: Meeting, arguments: [String: Any]) throws -> String {
+        var m = meeting
+        if let name = arguments["template"] as? String, !name.isEmpty {
+            guard templates.template(named: name) != nil else { throw ToolError.templateNotFound(name) }
+            m.templateName = name
+        }
+        let segments = archive.transcript(for: m.id)
+        guard !segments.isEmpty else {
+            throw ToolError.badArgument("\"\(m.title)\" has no transcript yet, so there's nothing to summarize.")
+        }
+        let transcript = TranscriptFormatter.plainText(segments, speakers: m.speakers)
+        let snapshot = m // immutable capture for the @Sendable bridge closure
+        let outcome = blockingAwait { await ProcessingPipeline.summarize(meeting: snapshot, transcript: transcript) }
+        switch outcome {
+        case .success(let summary, let provider):
+            try archive.saveSummary(summary, for: m.id)
+            if var fresh = archive.meeting(id: m.id) {
+                fresh.summaryProvider = provider
+                fresh.templateName = m.templateName
+                try? archive.save(fresh)
+            }
+            return summary
+        case .failure(let why):
+            throw ToolError.badArgument(why)
+        }
+    }
+
+    /// Runs an async operation to completion on a background task and blocks the
+    /// calling (MCP request-loop) thread until it finishes.
+    private func blockingAwait<T: Sendable>(_ operation: @escaping @Sendable () async -> T) -> T {
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = ResultBox<T>()
+        // Detached so it can't inherit (and then block on) the calling context.
+        Task.detached(priority: .userInitiated) {
+            box.value = await operation()
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return box.value!
+    }
+
+    private final class ResultBox<T>: @unchecked Sendable {
+        var value: T?
     }
 
     private static func describeTemplate(_ t: SummaryTemplate) -> String {

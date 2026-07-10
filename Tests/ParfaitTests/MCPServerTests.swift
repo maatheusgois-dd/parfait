@@ -83,7 +83,8 @@ final class MCPServerTests: XCTestCase {
         XCTAssertEqual(names, [
             "create_template", "delete_template", "get_live_transcript", "get_meeting",
             "get_template", "get_transcript", "list_meetings", "list_templates",
-            "rename_template", "search_meetings", "update_template",
+            "regenerate_summary", "rename_template", "search_meetings", "update_summary",
+            "update_template",
         ])
         for tool in tools {
             XCTAssertNotNil(tool["description"])
@@ -294,5 +295,53 @@ final class MCPServerTests: XCTestCase {
         XCTAssertEqual(
             MCPServer.liveTranscriptText(archive: archive, now: Date().addingTimeInterval(120)),
             "No meeting is being recorded right now.")
+    }
+
+    // MARK: - update_summary / regenerate_summary
+
+    func testUpdateSummaryWritesNotes() throws {
+        let resp = try roundTrip([
+            "jsonrpc": "2.0", "id": 30, "method": "tools/call",
+            "params": ["name": "update_summary", "arguments": [
+                "id": meeting.id.uuidString, "content": "## New\nRewritten notes.",
+            ]],
+        ])
+        XCTAssertEqual((resp["result"] as! [String: Any])["isError"] as? Bool, false)
+        XCTAssertEqual(archive.summary(for: meeting.id), "## New\nRewritten notes.")
+    }
+
+    func testUpdateSummaryRequiresContent() throws {
+        let resp = try roundTrip([
+            "jsonrpc": "2.0", "id": 31, "method": "tools/call",
+            "params": ["name": "update_summary", "arguments": ["id": meeting.id.uuidString]],
+        ])
+        XCTAssertEqual((resp["result"] as! [String: Any])["isError"] as? Bool, true)
+    }
+
+    func testRegenerateSummaryWithoutTranscriptErrors() throws {
+        var m = Meeting(title: "Empty", createdAt: Date())
+        m.state = .ready
+        try archive.createFolder(for: m.id)
+        try archive.save(m)
+        let resp = try roundTrip([
+            "jsonrpc": "2.0", "id": 32, "method": "tools/call",
+            "params": ["name": "regenerate_summary", "arguments": ["id": m.id.uuidString]],
+        ])
+        let result = resp["result"] as! [String: Any]
+        XCTAssertEqual(result["isError"] as? Bool, true)
+        let text = ((result["content"] as! [[String: Any]])[0]["text"] as! String)
+        XCTAssertTrue(text.contains("no transcript"))
+    }
+
+    func testRegenerateSummaryUnknownTemplateErrors() throws {
+        // The fixture meeting HAS a transcript, but an unknown template is rejected
+        // before summarization is ever attempted (so this stays deterministic).
+        let resp = try roundTrip([
+            "jsonrpc": "2.0", "id": 33, "method": "tools/call",
+            "params": ["name": "regenerate_summary", "arguments": [
+                "id": meeting.id.uuidString, "template": "Nonexistent Template",
+            ]],
+        ])
+        XCTAssertEqual((resp["result"] as! [String: Any])["isError"] as? Bool, true)
     }
 }

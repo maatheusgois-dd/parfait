@@ -54,10 +54,10 @@ enum ClaudeDesktopPrompt {
 
     static func meeting(id: UUID, title: String, question: String) -> String {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Claude has the parfait connector's tools available and can decide which to
+        // call — naming the meeting + its id is enough to steer it.
         return """
-        Answer a question about my Parfait meeting "\(title)". Use the "parfait" connector: call \
-        get_meeting with id "\(id.uuidString)" for the summary, and get_transcript with the same \
-        id if you need exact quotes.
+        Answer a question about my Parfait meeting "\(title)" (id: \(id.uuidString)).
 
         \(q.isEmpty ? defaultMeetingQuestion : q)
         """

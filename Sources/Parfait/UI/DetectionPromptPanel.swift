@@ -109,7 +109,7 @@ final class RecordingCardController {
             shownID = session.meetingID
             let host = NSHostingController(rootView: RecordingCardView(
                 session: session,
-                onAsk: { _ = ClaudeDesktop.openNewChat(prompt: ClaudeDesktopPrompt.live(question: "")) },
+                onAsk: { _ = AIAsk.openLive() },
                 onClose: { AppState.shared.recordingCardDismissed = true },
                 onStop: { Task { await AppState.shared.stopRecording() } }))
             panel.contentViewController = host
@@ -214,7 +214,7 @@ private struct RecordingCardView: View {
             transcript
             HStack(spacing: 8) {
                 Button(action: onAsk) {
-                    Label("Ask Claude live", systemImage: "sparkles")
+                    Label("Ask AI live", systemImage: "sparkles")
                         .font(.parfait(12, .semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 2)

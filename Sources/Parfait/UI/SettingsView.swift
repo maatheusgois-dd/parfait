@@ -182,7 +182,19 @@ private struct IntelligenceSettings: View {
     @State private var claudeLoggedIn = false
     @State private var ghAvailable = false
     @State private var claudeCodeAvailable = false
-    @AppStorage(SettingsKey.preferClaudeSummaries) private var preferClaudeSummaries = true
+    @State private var codexInstalled = false
+    @State private var codexLoggedIn = false
+    @State private var codexSetupAvailable = false
+    @AppStorage(SettingsKey.preferClaudeSummaries) private var preferClaudeSummaries = false
+    @AppStorage(SettingsKey.preferredAIProvider) private var preferredAIProvider: AIProvider = .apple
+
+    private var cloudAssistantReady: Bool {
+        switch preferredAIProvider {
+        case .apple: AppleSummarizer.isAvailable
+        case .claude: claudeInstalled && claudeLoggedIn
+        case .codex: codexInstalled && codexLoggedIn
+        }
+    }
 
     var body: some View {
         Form {
@@ -222,84 +234,108 @@ private struct IntelligenceSettings: View {
                     }
                 }
 
-                Toggle("Always use Claude for summaries", isOn: $preferClaudeSummaries)
-                    .disabled(!(claudeInstalled && claudeLoggedIn))
-                Text("Claude writes higher-quality notes, but runs on your own plan and is a little slower. Off: Apple Intelligence summarizes on-device, and Claude steps in only when a meeting is too long to fit.")
-                    .font(.parfait(11))
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Connect Claude to your meetings") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Give Claude access to your meeting library so you can ask about your meetings from anywhere. Everything stays local — the connector just reads Parfait's on-disk library.")
-                        .font(.parfait(12))
-
-                    HStack {
-                        Button("Add to Claude Code") { ClaudeCode.addMCPServer(binary: binaryPath) }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Theme.raspberry)
-                        Button("Add to Claude Desktop") {
-                            ClaudeCode.addToClaudeDesktop(
-                                binary: binaryPath, configPath: claudeDesktopConfigURL.path)
-                        }
-                    }
-                    .controlSize(.small)
-                    .disabled(!claudeCodeAvailable)
-
-                    Text(claudeCodeAvailable
-                         ? "Claude Code runs the setup for you and confirms it worked."
-                         : "Install Claude Desktop (it includes Claude Code) to use these buttons.")
+                if preferredAIProvider.isCloud {
+                    Toggle("Always use \(preferredAIProvider.displayName) for summaries", isOn: $preferClaudeSummaries)
+                        .disabled(!cloudAssistantReady)
+                    Text("On: every summary via \(preferredAIProvider.displayName). Off: \(preferredAIProvider.displayName) first, with Apple Intelligence only if it fails.")
                         .font(.parfait(11))
                         .foregroundStyle(.secondary)
+                }
+            }
 
-                    DisclosureGroup("Prefer to run it yourself?") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text(mcpCommand)
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .padding(8)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
-                                Button {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(mcpCommand, forType: .string)
-                                } label: {
-                                    Image(systemName: "doc.on.doc")
-                                }
-                                .buttonStyle(.plain)
-                                .help("Copy the claude mcp add command")
-                            }
-                            Text("Or add the \"parfait\" entry to Claude Desktop's config (merge into any existing \"mcpServers\"):")
-                                .font(.parfait(11))
-                                .foregroundStyle(.secondary)
-                            HStack {
-                                Button("Copy JSON") {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(mcpDesktopConfigSnippet, forType: .string)
-                                }
-                                Button("Reveal config in Finder") {
-                                    NSWorkspace.shared.activateFileViewerSelecting([claudeDesktopConfigURL])
-                                }
-                            }
-                            .controlSize(.small)
-                        }
-                        .padding(.top, 4)
+            Section("Ask AI") {
+                Picker("Assistant", selection: $preferredAIProvider) {
+                    ForEach(AIProvider.allCases) { provider in
+                        Text(provider.displayName).tag(provider)
                     }
+                }
+                Text("Choose which assistant Parfait uses for meeting chat and summaries.")
                     .font(.parfait(11))
+                    .foregroundStyle(.secondary)
+
+                switch preferredAIProvider {
+                case .apple:
+                    statusRow(
+                        ok: AppleSummarizer.isAvailable,
+                        title: "Apple Intelligence",
+                        detail: AppleSummarizer.isAvailable
+                            ? "Summaries and titles run entirely on this Mac. Pick Claude or Codex above to ask about meetings in chat."
+                            : (AppleSummarizer.unavailableReason ?? "Unavailable on this Mac."))
+                case .codex:
+                    statusRow(
+                        ok: codexInstalled && codexLoggedIn,
+                        title: codexInstalled
+                            ? (codexLoggedIn ? "Codex CLI — connected" : "Codex CLI — not logged in")
+                            : "Codex CLI — not installed",
+                        detail: codexInstalled
+                            ? (codexLoggedIn
+                                ? "Ask about your meetings from Codex once the parfait connector is set up."
+                                : "Run `codex login` once to enable this.")
+                            : "Install from chatgpt.com/codex to ask about your meetings through Codex.")
+                case .claude:
+                    statusRow(
+                        ok: claudeInstalled && claudeLoggedIn,
+                        title: claudeInstalled
+                            ? (claudeLoggedIn ? "Claude Code — connected" : "Claude Code — not logged in")
+                            : "Claude Code — not installed",
+                        detail: claudeInstalled
+                            ? (claudeLoggedIn
+                                ? "Ask about your meetings from Claude once the parfait connector is set up."
+                                : "Open Claude Code and log in once to enable this.")
+                            : "Install from claude.com/claude-code to ask about your meetings through Claude.")
+                }
+            }
+
+            if preferredAIProvider.isCloud {
+                Section("Connect \(preferredAIProvider.displayName) to your meetings") {
+                    connectAIContent
+                }
+            }
+
+            Section {
+                HStack {
+                    Spacer()
+                    AIDebugLogButton()
                 }
             }
         }
         .formStyle(.grouped)
         .onAppear {
             claudeInstalled = ClaudeCLI.isInstalled
+            codexInstalled = CodexCLI.isInstalled
             ghAvailable = GitHubGist.isAvailable
             claudeCodeAvailable = ClaudeCode.isAvailable
+            codexSetupAvailable = CodexSetup.isAvailable
             Task.detached {
                 let loggedIn = ClaudeCLI.isLoggedIn()
-                await MainActor.run { claudeLoggedIn = loggedIn }
+                let codexIn = CodexCLI.isLoggedIn()
+                await MainActor.run {
+                    claudeLoggedIn = loggedIn
+                    codexLoggedIn = codexIn
+                    logAssistantStatus()
+                }
             }
         }
+        .onChange(of: preferredAIProvider) { logAssistantStatus() }
+        .onChange(of: preferClaudeSummaries) { logAssistantStatus() }
+    }
+
+    private func logAssistantStatus() {
+        AIDebugLog.log("── Intelligence settings ──")
+        AIDebugLog.log("Assistant: \(preferredAIProvider.displayName)")
+        AIDebugLog.log("Always use cloud for summaries: \(preferClaudeSummaries) (cloud-only when on)")
+        if AppleSummarizer.isAvailable {
+            AIDebugLog.log("Apple Intelligence: available")
+        } else {
+            AIDebugLog.log("Apple Intelligence: \(AppleSummarizer.unavailableReason ?? "unavailable")")
+        }
+        AIDebugLog.log(
+            "Claude: \(claudeInstalled ? "installed" : "not installed")"
+                + (claudeInstalled ? ", \(claudeLoggedIn ? "logged in" : "not logged in")" : ""))
+        AIDebugLog.log(
+            "Codex: \(codexInstalled ? "installed" : "not installed")"
+                + (codexInstalled ? ", \(codexLoggedIn ? "logged in" : "not logged in")" : "")
+                + ", ready: \(CodexCLI.isReady)")
     }
 
     private var binaryPath: String {
@@ -326,6 +362,128 @@ private struct IntelligenceSettings: View {
     private var claudeDesktopConfigURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Claude/claude_desktop_config.json")
+    }
+
+    private var codexConfigURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/config.toml")
+    }
+
+    private var codexMCPCommand: String {
+        "codex mcp add parfait -- \"\(binaryPath)\" --mcp"
+    }
+
+    @ViewBuilder
+    private var connectAIContent: some View {
+        switch preferredAIProvider {
+        case .apple:
+            EmptyView()
+        case .claude:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Give Claude access to your meeting library. Everything stays local — the connector just reads Parfait's on-disk library.")
+                    .font(.parfait(12))
+
+                HStack {
+                    Button("Add to Claude Code") { ClaudeCode.addMCPServer(binary: binaryPath) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.raspberry)
+                    Button("Add to Claude Desktop") {
+                        ClaudeCode.addToClaudeDesktop(
+                            binary: binaryPath, configPath: claudeDesktopConfigURL.path)
+                    }
+                }
+                .controlSize(.small)
+                .disabled(!claudeCodeAvailable)
+
+                Text(claudeCodeAvailable
+                     ? "Claude Code runs the setup for you and confirms it worked."
+                     : "Install Claude Desktop (it includes Claude Code) to use these buttons.")
+                    .font(.parfait(11))
+                    .foregroundStyle(.secondary)
+
+                DisclosureGroup("Prefer to run it yourself?") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(mcpCommand)
+                                .font(.system(size: 11, design: .monospaced))
+                                .textSelection(.enabled)
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(mcpCommand, forType: .string)
+                            } label: {
+                                Image(systemName: "doc.on.doc")
+                            }
+                            .buttonStyle(.plain)
+                            .help("Copy the claude mcp add command")
+                        }
+                        Text("Or add the \"parfait\" entry to Claude Desktop's config (merge into any existing \"mcpServers\"):")
+                            .font(.parfait(11))
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            Button("Copy JSON") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(mcpDesktopConfigSnippet, forType: .string)
+                            }
+                            Button("Reveal config in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([claudeDesktopConfigURL])
+                            }
+                        }
+                        .controlSize(.small)
+                    }
+                    .padding(.top, 4)
+                }
+                .font(.parfait(11))
+            }
+        case .codex:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Give Codex access to your meeting library. Everything stays local — the connector just reads Parfait's on-disk library. Use $parfait (not @) to attach it.")
+                    .font(.parfait(12))
+
+                HStack {
+                    Button("Add with Codex") { CodexSetup.addMCPServer(binary: binaryPath) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.raspberry)
+                        .disabled(!codexSetupAvailable)
+                }
+                .controlSize(.small)
+
+                Text(codexSetupAvailable
+                     ? "Codex runs the setup and confirms it worked."
+                     : "Install and log in to Codex CLI to use this button.")
+                    .font(.parfait(11))
+                    .foregroundStyle(.secondary)
+
+                DisclosureGroup("Prefer to run it yourself?") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(codexMCPCommand)
+                                .font(.system(size: 11, design: .monospaced))
+                                .textSelection(.enabled)
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(codexMCPCommand, forType: .string)
+                            } label: {
+                                Image(systemName: "doc.on.doc")
+                            }
+                            .buttonStyle(.plain)
+                            .help("Copy the codex mcp add command")
+                        }
+                        Button("Reveal config in Finder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([codexConfigURL])
+                        }
+                        .controlSize(.small)
+                    }
+                    .padding(.top, 4)
+                }
+                .font(.parfait(11))
+            }
+        }
     }
 
     private func statusRow(ok: Bool, title: String, detail: String) -> some View {

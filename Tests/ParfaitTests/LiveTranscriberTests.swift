@@ -111,4 +111,27 @@ final class LiveTranscriberTests: XCTestCase {
         let meTexts = segments.filter { $0.speakerID == "me" }.map(\.text)
         XCTAssertEqual(meTexts, ["works for everyone on our side"])
     }
+
+    func testHeadphoneBleedRemovesMicNearOthersWithSharedVocabulary() {
+        var segments = [
+            seg("me", 80.0, "and then repeat Jesus and more words here"),
+            seg("them", 80.5, "you speak and then repeat Jesus and then English"),
+        ]
+        LiveTranscriber.removeHeadphoneBleedMic(
+            around: 80.5, othersText: segments[1].text, in: &segments, window: 3.0)
+        XCTAssertEqual(segments.map(\.speakerID), ["them"])
+    }
+
+    func testFormattedVolatileLabelsChannels() {
+        let text = LiveTranscriber.formattedVolatile([
+            LiveTranscriber.youSpeakerID: "hello",
+            LiveTranscriber.othersSpeakerID: "hi there",
+        ])
+        XCTAssertTrue(text.contains("You: hello"))
+        XCTAssertTrue(text.contains("Others: hi there"))
+    }
+
+    func testRemoteSpeechPeakThreshold() {
+        XCTAssertGreaterThan(LiveTranscriber.remoteSpeechPeakThreshold, 0.01)
+    }
 }

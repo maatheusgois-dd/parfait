@@ -513,6 +513,7 @@ struct MeetingDetailView: View {
     @ViewBuilder
     private var noticeBanner: some View {
         if let notice = meeting.notice,
+           !isRecordingThisMeeting,
            !emptyNotesHandlesNotice,
            let presentation = MeetingNotice.effectivePresentation(
                for: notice, hasTranscript: hasTranscript) {

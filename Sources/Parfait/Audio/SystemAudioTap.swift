@@ -36,6 +36,15 @@ final class SystemAudioTap: @unchecked Sendable {
     /// All AVAudioFile writes (and finalization) are confined here.
     private let ioQueue = DispatchQueue(label: "parfait.system-tap.io", qos: .userInitiated)
 
+    struct CaptureStats: Sendable {
+        var callbackCount = 0
+        var framesWritten: UInt64 = 0
+        var peakLevel: Float = 0
+        var receivedAnyCallback = false
+    }
+
+    private(set) var captureStats = CaptureStats()
+
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var ioProcID: AudioDeviceIOProcID?
@@ -57,6 +66,26 @@ final class SystemAudioTap: @unchecked Sendable {
     var signalDetectedHandler: (@Sendable () -> Void)?
     private var didSignalSuccess = false
 
+    /// Peak from the last few seconds of system tap IO — proxy for remote speech.
+    var recentSystemPeak: Float {
+        controlQueue.sync { ioQueue.sync { recentPeakWithinWindow() } }
+    }
+
+    private var lastRemotePeak: Float = 0
+    private var lastRemotePeakHostTime: UInt64 = 0
+    private static let remotePeakMemory: Double = 3.0
+
+    /// True once the tap has delivered non-silent audio this session (proof the TCC grant is real).
+    var signalDetected: Bool {
+        controlQueue.sync { ioQueue.sync { didSignalSuccess } }
+    }
+
+    private func recentPeakWithinWindow() -> Float {
+        guard lastRemotePeakHostTime > 0 else { return 0 }
+        let elapsed = Double(mach_absolute_time() - lastRemotePeakHostTime) / Self.ticksPerSecond
+        return elapsed <= Self.remotePeakMemory ? lastRemotePeak : 0
+    }
+
     /// Fork of each captured buffer for live transcription. Assign before start().
     /// The sink deep-copies immediately — the buffer is only valid during this
     /// IO callback. (ioQueue after start; set once before start, like the handler above.)
@@ -70,9 +99,14 @@ final class SystemAudioTap: @unchecked Sendable {
     func start(writingTo url: URL) throws {
         try controlQueue.sync {
             guard !isRunning else { throw SystemAudioTapError.alreadyRunning }
+            captureStats = CaptureStats()
+            didSignalSuccess = false
             do {
                 let tap = try createTap()
                 let file = try makeFile(at: url, tapFormat: tap.format)
+                let outputName = Self.defaultOutputDeviceName() ?? "unknown"
+                ParfaitConsoleLog.recording(
+                    "system tap creating output=[\(outputName)] tapSr=\(tap.format.sampleRate) tapCh=\(tap.format.channelCount)")
                 ioQueue.sync {
                     self.file = file
                     self.anchorHostTime = mach_absolute_time()
@@ -81,7 +115,9 @@ final class SystemAudioTap: @unchecked Sendable {
                 try createAggregateAndStartIO(tapUID: tap.uid, tapFormat: tap.format, file: file)
                 try installOutputDeviceListener()
                 isRunning = true
+                ParfaitConsoleLog.recording("system tap started")
             } catch {
+                ParfaitConsoleLog.recording("system tap start failed — \(error.localizedDescription)")
                 removeOutputDeviceListener()
                 teardownCapture()
                 ioQueue.sync { self.file = nil }
@@ -93,6 +129,10 @@ final class SystemAudioTap: @unchecked Sendable {
     func stop() {
         controlQueue.sync {
             guard isRunning else { return }
+            let (stats, signal) = ioQueue.sync { (captureStats, didSignalSuccess) }
+            ParfaitConsoleLog.recording(
+                "system tap stop callbacks=\(stats.callbackCount) frames=\(stats.framesWritten)"
+                    + " peak=\(String(format: "%.4f", stats.peakLevel)) signal=\(signal)")
             isRunning = false
             removeOutputDeviceListener()
             teardownCapture()
@@ -233,11 +273,15 @@ final class SystemAudioTap: @unchecked Sendable {
     /// file's processing format so one continuous recording keeps growing.
     private func rebuildForNewOutputDevice() {
         guard isRunning, let file else { return }
+        let outputName = Self.defaultOutputDeviceName() ?? "unknown"
+        ParfaitConsoleLog.recording("system tap rebuilding for new output=[\(outputName)]")
         teardownCapture()
         do {
             let tap = try createTap()
             try createAggregateAndStartIO(tapUID: tap.uid, tapFormat: tap.format, file: file)
+            ParfaitConsoleLog.recording("system tap rebuild OK output=[\(outputName)]")
         } catch {
+            ParfaitConsoleLog.recording("system tap rebuild failed — \(error.localizedDescription)")
             // Capture is dead, but keep the file open so stop() still finalizes
             // everything recorded so far. A later device change retries the rebuild.
             teardownCapture()
@@ -257,6 +301,23 @@ final class SystemAudioTap: @unchecked Sendable {
               input.frameLength > 0
         else { return }
 
+        captureStats.callbackCount += 1
+        captureStats.framesWritten += UInt64(input.frameLength)
+        if let samples = input.floatChannelData?[0] {
+            var peak: Float = 0
+            vDSP_maxmgv(samples, 1, &peak, vDSP_Length(input.frameLength))
+            captureStats.peakLevel = max(captureStats.peakLevel, peak)
+            if peak >= 0.015 {
+                lastRemotePeak = max(lastRemotePeak, peak)
+                lastRemotePeakHostTime = mach_absolute_time()
+            }
+        }
+        let logFirst = !captureStats.receivedAnyCallback
+        if logFirst { captureStats.receivedAnyCallback = true }
+        let logHeartbeat = captureStats.callbackCount % 500 == 0
+        let callbackPeak = captureStats.peakLevel
+        let callbackCount = captureStats.callbackCount
+
         // Fork to the live transcriber (it deep-copies before this callback returns).
         bufferSink?(input)
 
@@ -264,7 +325,15 @@ final class SystemAudioTap: @unchecked Sendable {
         // whereas a denied grant hands back all-zero buffers on this same path.
         if !didSignalSuccess, Self.containsSignal(input) {
             didSignalSuccess = true
+            ParfaitConsoleLog.recording(
+                "system tap signal detected peak=\(String(format: "%.4f", callbackPeak)) callbacks=\(callbackCount)")
             signalDetectedHandler?()
+        } else if logFirst {
+            ParfaitConsoleLog.recording(
+                "system tap first callback frames=\(input.frameLength) peak=\(String(format: "%.4f", callbackPeak)) silent=\(!Self.containsSignal(input))")
+        } else if logHeartbeat {
+            ParfaitConsoleLog.recording(
+                "system tap heartbeat callbacks=\(callbackCount) peak=\(String(format: "%.4f", callbackPeak)) signal=\(didSignalSuccess)")
         }
 
         // On the first real buffer, pad the file so its t=0 is recording start,
@@ -313,7 +382,7 @@ final class SystemAudioTap: @unchecked Sendable {
         guard let samples = buffer.floatChannelData?[0] else { return false }
         var peak: Float = 0
         vDSP_maxmgv(samples, 1, &peak, vDSP_Length(buffer.frameLength))
-        return peak > 0.0001
+        return peak > 0.005
     }
 
     /// Writes `seconds` of silence to the file in the file's processing format,
@@ -461,5 +530,16 @@ final class SystemAudioTap: @unchecked Sendable {
                 "kAudioDevicePropertyDeviceUID")
         }
         return uid as String
+    }
+
+    private static func defaultOutputDeviceName() -> String? {
+        var addr = address(kAudioHardwarePropertyDefaultOutputDevice)
+        var deviceID = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.stride)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &deviceID) == noErr,
+              deviceID != kAudioObjectUnknown
+        else { return nil }
+        return deviceName(deviceID)
     }
 }

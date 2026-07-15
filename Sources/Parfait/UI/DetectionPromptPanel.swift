@@ -102,6 +102,27 @@ private final class FloatingPanelPlacement {
     }
 }
 
+/// Transparent click target that works on the first mouse-down in a non-activating panel.
+private struct FirstMouseClickArea: NSViewRepresentable {
+    var onClick: () -> Void
+
+    func makeNSView(context: Context) -> ClickView {
+        let view = ClickView()
+        view.onClick = onClick
+        return view
+    }
+
+    func updateNSView(_ nsView: ClickView, context: Context) {
+        nsView.onClick = onClick
+    }
+
+    final class ClickView: NSView {
+        var onClick: (() -> Void)?
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override func mouseDown(with event: NSEvent) { onClick?() }
+    }
+}
+
 /// Drag handle that moves the hosting NSPanel without stealing button clicks elsewhere.
 private struct WindowDragArea: NSViewRepresentable {
     func makeNSView(context: Context) -> DragAreaView { DragAreaView() }
@@ -168,6 +189,7 @@ private struct PillHandleArea: NSViewRepresentable {
 final class DetectionPromptController {
     private var panel: FloatingPanel?
     private var shownName: String?
+    private var isDismissing = false
     private var cancellable: AnyCancellable?
 
     init() {
@@ -182,16 +204,19 @@ final class DetectionPromptController {
     private func update(appName: String?) {
         guard let appName else {
             shownName = nil
+            isDismissing = false
             panel?.orderOut(nil)
             return
         }
+        guard !isDismissing else { return }
         let panel = ensurePanel()
         if appName != shownName {
             shownName = appName
             let host = NSHostingController(rootView: DetectionPromptView(
                 appName: appName,
                 onRecord: { Task { await AppState.shared.acceptDetection() } },
-                onDismiss: { AppState.shared.dismissDetection() })
+                onDismiss: { AppState.shared.dismissDetection() },
+                onAutoDismiss: { [weak self] in self?.dismissAnimatedToRight() })
                 .parfaitAppearance())
             panel.contentViewController = host
             panel.setContentSize(host.view.fittingSize)
@@ -200,10 +225,34 @@ final class DetectionPromptController {
         panel.orderFrontRegardless() // show without activating the app
     }
 
+    private func dismissAnimatedToRight() {
+        guard !isDismissing, let panel else {
+            AppState.shared.dismissDetection()
+            return
+        }
+        isDismissing = true
+        let start = panel.frame
+        var end = start
+        end.origin.x = start.maxX + 24
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.28
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+            panel.animator().setFrame(end, display: true)
+        } completionHandler: { [weak self] in
+            Task { @MainActor in
+                panel.alphaValue = 1
+                panel.setFrame(start, display: false)
+                self?.shownName = nil
+                AppState.shared.dismissDetection()
+            }
+        }
+    }
+
     private func ensurePanel() -> FloatingPanel {
         if let panel { return panel }
         let panel = FloatingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 150),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 100),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
         panel.level = .floating
@@ -536,119 +585,122 @@ private struct DetectionPromptView: View {
     let appName: String
     let onRecord: () -> Void
     let onDismiss: () -> Void
+    let onAutoDismiss: () -> Void
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.parfaitActionColor) private var actionColor
+    @State private var progress: CGFloat = 0
+    @State private var closeHovered = false
+    @State private var recordHovered = false
 
-    private let cardWidth: CGFloat = 480
+    private let cardWidth: CGFloat = 360
+    private static let autoDismissSeconds: TimeInterval = 15
 
     var body: some View {
-        VStack(spacing: -6) {
+        HStack(alignment: .center, spacing: 8) {
+            closeButton
             headerCard
-            actionBar
         }
-        .frame(width: cardWidth)
-        .shadow(color: .black.opacity(scheme == .dark ? 0.45 : 0.18), radius: 24, y: 10)
+        .frame(width: cardWidth + 32)
+        .shadow(color: .black.opacity(scheme == .dark ? 0.5 : 0.16), radius: 20, y: 8)
         .padding(20) // transparent margin so the shadow isn't clipped by the panel bounds
-        .overlay { WindowDragArea() }
+        .task(id: appName) {
+            progress = 0
+            await Task.yield()
+            withAnimation(.linear(duration: Self.autoDismissSeconds)) {
+                progress = 1
+            }
+            try? await Task.sleep(for: .seconds(Self.autoDismissSeconds))
+            guard !Task.isCancelled else { return }
+            onAutoDismiss()
+        }
+    }
+
+    private var closeButton: some View {
+        Button(action: onDismiss) {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(closeHovered ? Theme.heading(scheme) : Theme.tertiary(scheme))
+                .frame(width: 26, height: 26)
+                .background(
+                    closeHovered ? Theme.card(scheme) : Theme.panel(scheme),
+                    in: Circle())
+                .overlay(Circle().strokeBorder(.primary.opacity(closeHovered ? 0.14 : 0.08)))
+        }
+        .buttonStyle(.plain)
+        .onHover { closeHovered = $0 }
+        .help("Dismiss")
     }
 
     private var headerCard: some View {
-        HStack(spacing: 12) {
-            dragHandle
-            VStack(alignment: .leading, spacing: 3) {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("Call detected")
-                    .font(.parfait(18, .semibold))
+                    .font(.parfait(17, .semibold))
                     .foregroundStyle(Theme.heading(scheme))
                 Text(appName)
-                    .font(.parfait(13))
+                    .font(.parfait(12))
                     .foregroundStyle(Theme.secondary(scheme))
             }
-            Spacer(minLength: 8)
-            takeNotesBadge
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(WindowDragArea())
+            takeNotesButton
         }
-        .padding(.leading, 4)
-        .padding(.trailing, 12)
-        .padding(.vertical, 14)
-        .background(Theme.panel(scheme), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(.primary.opacity(0.08)))
-        .overlay(alignment: .top) {
-            Capsule()
-                .fill(Theme.blueberry(scheme).opacity(0.55))
-                .frame(width: cardWidth * 0.42, height: 2)
-                .offset(y: -1)
-        }
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
+        .padding(.bottom, 15)
+        .background(Theme.panel(scheme), in: shape)
+        .overlay(shape.strokeBorder(.primary.opacity(0.09)))
+        .overlay(alignment: .top) { progressBar }
+        .clipShape(shape)
     }
 
-    private var dragHandle: some View {
-        VStack(spacing: 3) {
-            ForEach(0..<6, id: \.self) { _ in
-                Circle()
-                    .fill(Theme.tertiary(scheme).opacity(0.55))
-                    .frame(width: 3, height: 3)
+    private var progressBar: some View {
+        GeometryReader { geo in
+            let fillWidth = geo.size.width * progress
+            HStack(spacing: 0) {
+                Rectangle()
+                    .fill(Theme.blueberry(scheme))
+                    .frame(width: fillWidth)
+                Rectangle()
+                    .fill(Theme.blueberry(scheme).opacity(0.14))
             }
         }
-        .frame(width: 12)
-        .padding(.leading, 8)
+        .frame(height: 2)
+        .allowsHitTesting(false)
     }
 
-    private var takeNotesBadge: some View {
-        HStack(spacing: 10) {
+    private var takeNotesButton: some View {
+        takeNotesButtonLabel
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay { FirstMouseClickArea(onClick: onRecord) }
+            .onHover { recordHovered = $0 }
+            .help("Start recording")
+    }
+
+    private var takeNotesButtonLabel: some View {
+        HStack(spacing: 9) {
             ParfaitStripes()
-                .scaleEffect(0.42)
-                .frame(width: 20, height: 26)
-                .padding(4)
+                .scaleEffect(0.38)
+                .frame(width: 18, height: 24)
+                .padding(3)
                 .background(
                     Color(red: 0.78, green: 0.91, blue: 0.35),
-                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    in: RoundedRectangle(cornerRadius: 5, style: .continuous))
             Text("Take notes")
-                .font(.parfait(14, .medium))
+                .font(.parfait(13, .semibold))
                 .foregroundStyle(Theme.heading(scheme))
-            Divider()
-                .frame(height: 26)
-            Image(systemName: "chevron.down")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.tertiary(scheme))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 11)
+        .padding(.vertical, 7)
+        .background(
+            recordHovered ? Theme.surface(scheme) : Theme.card(scheme),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(.primary.opacity(0.06)))
-    }
-
-    private var actionBar: some View {
-        HStack(spacing: 12) {
-            Button(action: onRecord) {
-                Text("Record")
-                    .font(.parfait(14, .medium))
-                    .foregroundStyle(Theme.heading(scheme))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-            }
-            .buttonStyle(.plain)
-            .background(Theme.card(scheme), in: Capsule())
-            Button(action: onDismiss) {
-                Text("Dismiss")
-                    .font(.parfait(14, .medium))
-                    .foregroundStyle(Theme.heading(scheme))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 10)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(
-            scheme == .dark
-                ? Color(red: 0.12, green: 0.12, blue: 0.12)
-                : Color(red: 0.22, green: 0.22, blue: 0.22),
-            in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.primary.opacity(0.06)))
-        .padding(.horizontal, 8)
+                .strokeBorder(
+                    recordHovered ? actionColor.opacity(0.35) : .primary.opacity(0.07),
+                    lineWidth: recordHovered ? 1.5 : 1))
     }
 }
 

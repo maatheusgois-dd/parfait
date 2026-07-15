@@ -122,12 +122,15 @@ struct OnboardingView: View {
     }
 
     private var systemAudioOK: Bool? {
-        if systemAudioConfirmed || systemAudioStatus == .authorized { return true }
+        if systemAudioStatus == .authorized { return true }
         if systemAudioStatus == .denied { return false }
         return nil
     }
 
     private var systemAudioDetail: String {
+        if systemAudioConfirmed, systemAudioStatus != .authorized {
+            return "Previously captured call audio, but macOS no longer shows an active grant — click Grant to re-allow."
+        }
         if systemAudioConfirmed {
             return "Confirmed — captured system audio in a previous recording."
         }

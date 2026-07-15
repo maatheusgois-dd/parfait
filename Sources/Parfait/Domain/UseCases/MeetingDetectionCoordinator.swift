@@ -5,12 +5,13 @@ import Foundation
 final class MeetingDetectionCoordinator {
     private let detectionService: MeetingDetectionService
     private let settings: SettingsRepository
-    private let startRecording: StartRecordingUseCase
-    private let stopRecording: StopRecordingUseCase
 
     var onDetectedAppNameChanged: ((String?) -> Void)?
     var onActiveMicAppsChanged: (([pid_t: String]) -> Void)?
     var onDetectionChime: (() -> Void)?
+    /// Routed through AppState so `session` stays in sync with `RecordingService`.
+    var onAutoRecord: ((String) async -> Void)?
+    var onAutoStop: (() async -> Void)?
 
     private(set) var activeMicApps: [pid_t: String] = [:]
     private var pendingDetection: MicEvent?
@@ -24,14 +25,10 @@ final class MeetingDetectionCoordinator {
 
     init(
         detectionService: MeetingDetectionService,
-        settings: SettingsRepository,
-        startRecording: StartRecordingUseCase,
-        stopRecording: StopRecordingUseCase
+        settings: SettingsRepository
     ) {
         self.detectionService = detectionService
         self.settings = settings
-        self.startRecording = startRecording
-        self.stopRecording = stopRecording
     }
 
     func start() {
@@ -57,7 +54,7 @@ final class MeetingDetectionCoordinator {
     func acceptDetection() async {
         let name = pendingDetection.map(MeetingDetectionServiceImpl.displayName)
         ParfaitConsoleLog.detection("user accepted prompt for \(name ?? "?")")
-        _ = await startRecording.execute(sourceApp: name, calendarEvent: nil)
+        if let name { await onAutoRecord?(name) }
         clearPendingDetection()
     }
 
@@ -92,7 +89,7 @@ final class MeetingDetectionCoordinator {
 
             if settings.autoRecord {
                 ParfaitConsoleLog.detection("auto-record for \(name)")
-                Task { await startRecording.execute(sourceApp: name, calendarEvent: nil) }
+                Task { await onAutoRecord?(name) }
             } else {
                 let now = ContinuousClock.now
                 let recentlyAnnounced = lastDetectionAnnounce[event.pid]
@@ -133,6 +130,6 @@ final class MeetingDetectionCoordinator {
     private func autoStop() async {
         guard isRecording(), settings.autoStopRecording, activeMicApps.isEmpty else { return }
         ParfaitConsoleLog.detection("auto-stop firing")
-        _ = await stopRecording.execute()
+        await onAutoStop?()
     }
 }

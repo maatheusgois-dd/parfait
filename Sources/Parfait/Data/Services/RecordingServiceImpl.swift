@@ -28,8 +28,14 @@ final class RecordingServiceImpl: RecordingService {
         ParfaitConsoleLog.recording("start requested source=\(sourceApp ?? "manual") calendar=\(calendarEvent?.title ?? "none")")
 
         if !MicRecorder.permissionGranted {
-            _ = await MicRecorder.requestPermission()
+            let granted = await MicRecorder.requestPermission()
+            ParfaitConsoleLog.recording("mic permission requested granted=\(granted) status=\(MicRecorder.permissionGranted)")
         }
+        let sysBefore = SystemAudioPermission.statusLabel
+        if SystemAudioPermission.status() == .unknown {
+            await SystemAudioPermission.request()
+        }
+        ParfaitConsoleLog.recording("permissions mic=\(MicRecorder.permissionGranted) system=\(SystemAudioPermission.statusLabel) (was \(sysBefore))")
 
         let resolvedCalendarEvent = await resolveCalendarEvent(
             calendarEvent: calendarEvent,
@@ -85,8 +91,14 @@ final class RecordingServiceImpl: RecordingService {
         defer { _isStartingRecording = false }
 
         if !MicRecorder.permissionGranted {
-            _ = await MicRecorder.requestPermission()
+            let granted = await MicRecorder.requestPermission()
+            ParfaitConsoleLog.recording("mic permission requested granted=\(granted) status=\(MicRecorder.permissionGranted)")
         }
+        let sysBefore = SystemAudioPermission.statusLabel
+        if SystemAudioPermission.status() == .unknown {
+            await SystemAudioPermission.request()
+        }
+        ParfaitConsoleLog.recording("permissions mic=\(MicRecorder.permissionGranted) system=\(SystemAudioPermission.statusLabel) (was \(sysBefore))")
         guard !isRecording else { return .failure(.alreadyRecording) }
 
         let archive = meetingRepository.archive
@@ -181,6 +193,7 @@ final class RecordingServiceImpl: RecordingService {
             return .failure(.sessionStartFailed(error.localizedDescription))
         }
         var saved = meeting
+        saved.state = .recording
         saved.notice = newSession.startupNotice
         meetingRepository.upsert(saved)
         currentSession = newSession

@@ -32,6 +32,7 @@ final class RecordingSession: ObservableObject {
     private var lastLivePersist = Date.distantPast
     private var ticker: Timer?
     private var activeObserver: NSObjectProtocol?
+    private var systemSignalCheck: Task<Void, Never>?
 
     enum SessionError: LocalizedError {
         case nothingStarted(String)
@@ -56,6 +57,7 @@ final class RecordingSession: ObservableObject {
     }
 
     func start(micURL: URL, systemURL: URL) throws {
+        MicRecorder.logAudioDeviceSnapshot(context: "session start")
         ParfaitConsoleLog.recording(
             "start meeting=\(meetingID.uuidString.prefix(8)) offset=\(Int(elapsedOffset))s source=\(sourceApp ?? "manual") accessibility=\(AccessibilityPermission.isTrusted)")
         var problems: [String] = []
@@ -64,6 +66,10 @@ final class RecordingSession: ObservableObject {
         // starting the recorders so no early audio is missed; it's best-effort —
         // any failure here never affects the recording itself.
         let live = LiveTranscriber(startDate: startedAt, timeOffset: elapsedOffset)
+        live.headphoneBleedMode = MicRecorder.headphoneBleedLikely
+        if live.headphoneBleedMode {
+            ParfaitConsoleLog.recording("headphone bleed mode — mic bleed will attribute to Others")
+        }
         live.onUpdate = { [weak self] segments, volatile in
             Task { @MainActor in self?.applyLive(segments, volatile) }
         }
@@ -77,14 +83,24 @@ final class RecordingSession: ObservableObject {
             try mic.start(writingTo: micURL)
             micStarted = true
         } catch {
+            let ns = error as NSError
+            ParfaitConsoleLog.recording(
+                "mic start failed domain=\(ns.domain) code=\(ns.code) — \(error.localizedDescription)")
             problems.append("microphone: \(error.localizedDescription)")
         }
-        tap.signalDetectedHandler = { AppSettings.markSystemAudioConfirmed() }
+        tap.signalDetectedHandler = {
+            AppSettings.markSystemAudioConfirmed()
+            ParfaitConsoleLog.recording("system audio confirmed — non-silent signal received")
+        }
         tap.bufferSink = { [weak live] buffer in live?.feedSystem(buffer) }
         do {
             try tap.start(writingTo: systemURL)
             systemStarted = true
+            live.systemPeakProvider = { [weak tap] in tap?.recentSystemPeak ?? 0 }
         } catch {
+            let ns = error as NSError
+            ParfaitConsoleLog.recording(
+                "system tap start failed domain=\(ns.domain) code=\(ns.code) — \(error.localizedDescription)")
             problems.append("system audio: \(error.localizedDescription)")
         }
         guard micStarted || systemStarted else {
@@ -121,6 +137,16 @@ final class RecordingSession: ObservableObject {
                 self.elapsed = self.elapsedOffset + Date().timeIntervalSince(self.startedAt)
             }
         }
+
+        if systemStarted {
+            systemSignalCheck = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(15))
+                guard !Task.isCancelled, let self, self.systemStarted, !self.tap.signalDetected else { return }
+                let input = MicRecorder.defaultInputDeviceName ?? "unknown"
+                ParfaitConsoleLog.recording(
+                    "system audio still silent after 15s (input=\(input)) — grant System Audio Recording in Privacy & Security → System Audio Recording Only")
+            }
+        }
     }
 
     /// Applies a live-transcript update on the main actor: refreshes the observable
@@ -148,7 +174,16 @@ final class RecordingSession: ObservableObject {
         switch (micStarted, systemStarted) {
         case (true, true): break
         case (false, true):
-            parts.append("Microphone wasn't recorded (permission missing?) — only the other side of the call was captured.")
+            if MicRecorder.defaultInputIsBluetooth {
+                parts.append(
+                    "Microphone wasn't recorded — Zoom is likely using your Bluetooth headset mic."
+                        + " In Zoom → Audio, switch the microphone to MacBook Pro Microphone (headphones are fine for listening).")
+            } else {
+                parts.append("Microphone wasn't recorded (permission missing?) — only the other side of the call was captured.")
+            }
+            if SystemAudioPermission.status() != .authorized {
+                parts.append("Grant System Audio Recording in Privacy & Security → System Audio Recording Only.")
+            }
         case (true, false):
             parts.append("System audio wasn't recorded — only your microphone was captured. Grant System Audio Recording in Privacy & Security.")
         case (false, false): break
@@ -161,6 +196,8 @@ final class RecordingSession: ObservableObject {
 
     func stop() {
         ParfaitConsoleLog.recording("stop meeting=\(meetingID.uuidString.prefix(8)) elapsed=\(Int(elapsed))s liveSegments=\(liveSegments.count)")
+        systemSignalCheck?.cancel()
+        systemSignalCheck = nil
         ticker?.invalidate()
         ticker = nil
         if let activeObserver {
@@ -171,8 +208,16 @@ final class RecordingSession: ObservableObject {
         zoomSpeakerTracker = nil
         activeRemoteSpeaker = nil
         micBarLevels = Array(repeating: 0, count: 12)
+        let micURL = archive.micURL(for: meetingID)
+        let systemURL = archive.systemURL(for: meetingID)
+        let micHeard = micStarted ? mic.captureStats.receivedAnyBuffer : false
+        let systemSignal = systemStarted ? tap.signalDetected : false
         if micStarted { mic.stop() }
         if systemStarted { tap.stop() }
+        let micBytes = (try? FileManager.default.attributesOfItem(atPath: micURL.path)[.size] as? Int) ?? 0
+        let systemBytes = (try? FileManager.default.attributesOfItem(atPath: systemURL.path)[.size] as? Int) ?? 0
+        ParfaitConsoleLog.recording(
+            "capture files mic=\(micBytes)B system=\(systemBytes)B micSignal=\(micHeard) systemSignal=\(systemSignal)")
         if let live = liveTranscriber {
             liveTranscriber = nil
             // This Task inherits the main actor. After the transcribers finalize,

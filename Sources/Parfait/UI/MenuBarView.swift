@@ -7,6 +7,7 @@ struct MenuBarView: View {
     @Environment(\.openSettings) private var openSettings
     @Environment(\.colorScheme) private var scheme
     @Environment(\.parfaitActionColor) private var actionColor
+    @State private var showQuitConfirm = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -43,7 +44,7 @@ struct MenuBarView: View {
                     .foregroundStyle(Theme.blueberry)
                 Spacer()
                 Button {
-                    NSApp.terminate(nil)
+                    showQuitConfirm = true
                 } label: {
                     Image(systemName: "power")
                 }
@@ -52,10 +53,18 @@ struct MenuBarView: View {
                 .help("Quit Parfait")
             }
         }
+        .confirmationDialog("Quit Parfait?", isPresented: $showQuitConfirm) {
+            Button("Quit", role: .destructive) { NSApp.terminate(nil) }
+        } message: {
+            Text(app.isRecording ? "A recording is in progress." : "Parfait will stop running in the background.")
+        }
         .padding(14)
         .frame(width: 320)
         .background(MenuBarExtraWindowHook())
-        .task { await app.calendar.refreshAgenda() }
+        .task {
+            app.reconcileRecordingState()
+            await app.calendar.refreshAgenda()
+        }
     }
 
     private var upcomingDays: [UpcomingMeetingsDay] {

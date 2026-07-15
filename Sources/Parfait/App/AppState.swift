@@ -47,7 +47,7 @@ final class AppState: NSObject, ObservableObject {
         container.calendarRepository.meetingForCalendarEvent(event, in: store.meetings)
     }
 
-    var isRecording: Bool { session != nil }
+    var isRecording: Bool { session != nil || container.recordingService.isRecording }
 
     private init(container: DependencyContainer) {
         self.container = container
@@ -111,6 +111,21 @@ final class AppState: NSObject, ObservableObject {
         coordinator.onDetectionChime = { [weak self] in
             self?.container.notificationService.playDetectionChime()
         }
+        coordinator.onAutoRecord = { [weak self] name in
+            await self?.startRecording(sourceApp: name)
+        }
+        coordinator.onAutoStop = { [weak self] in
+            await self?.stopRecording()
+        }
+    }
+
+    /// Heals a stale UI when capture is live in `RecordingService` but `session` was never set.
+    func reconcileRecordingState() {
+        guard session == nil,
+              let svcSession = container.recordingService.currentSession,
+              let meeting = container.recordingService.recordingMeeting else { return }
+        applyRecordingHandle(RecordingSessionHandle(session: svcSession, meeting: meeting))
+        lastError = nil
     }
 
     func bootstrap() {
@@ -199,6 +214,10 @@ final class AppState: NSObject, ObservableObject {
         case .success(let handle):
             applyRecordingHandle(handle)
         case .failure(let error):
+            if error == .alreadyRecording {
+                reconcileRecordingState()
+                if session != nil { return }
+            }
             lastError = error.localizedDescription
             ParfaitConsoleLog.recording("start failed — \(error.localizedDescription)")
         }

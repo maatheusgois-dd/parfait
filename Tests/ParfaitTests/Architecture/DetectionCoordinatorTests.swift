@@ -7,7 +7,7 @@ final class DetectionCoordinatorTests: XCTestCase {
         settings: MockSettingsRepository = MockSettingsRepository(),
         recording: MockRecordingService,
         detection: MockMeetingDetectionService = MockMeetingDetectionService()
-    ) -> (MeetingDetectionCoordinator, MockMeetingDetectionService, MockSettingsRepository) {
+    ) -> (MeetingDetectionCoordinator, MockMeetingDetectionService, MockSettingsRepository, StartRecordingUseCase, StopRecordingUseCase) {
         let meetings = MockMeetingRepository()
         let processing = MockProcessingService()
         let processUC = ProcessMeetingUseCase(
@@ -26,10 +26,14 @@ final class DetectionCoordinatorTests: XCTestCase {
             processMeeting: processUC)
         let coordinator = MeetingDetectionCoordinator(
             detectionService: detection,
-            settings: settings,
-            startRecording: start,
-            stopRecording: stop)
-        return (coordinator, detection, settings)
+            settings: settings)
+        coordinator.onAutoRecord = { name in
+            _ = await start.execute(sourceApp: name, calendarEvent: nil)
+        }
+        coordinator.onAutoStop = {
+            _ = await stop.execute()
+        }
+        return (coordinator, detection, settings, start, stop)
     }
 
     func testAutoRecordStartsCapture() async {
@@ -40,7 +44,7 @@ final class DetectionCoordinatorTests: XCTestCase {
             repository: MockMeetingRepository(), title: "Auto")
         recording.startResult = .success(handle)
 
-        let (coordinator, detection, _) = makeCoordinator(
+        let (coordinator, detection, _, _, _) = makeCoordinator(
             settings: settings, recording: recording)
         coordinator.isRecording = { false }
         coordinator.isStartingRecording = { false }
@@ -55,7 +59,7 @@ final class DetectionCoordinatorTests: XCTestCase {
     func testManualDetectionSurfacesAppName() async {
         var settings = MockSettingsRepository()
         settings.autoRecord = false
-        let (coordinator, detection, _) = makeCoordinator(settings: settings, recording: MockRecordingService())
+        let (coordinator, detection, _, _, _) = makeCoordinator(settings: settings, recording: MockRecordingService())
         var detected: String?
         coordinator.onDetectedAppNameChanged = { detected = $0 }
         coordinator.isRecording = { false }
@@ -69,7 +73,7 @@ final class DetectionCoordinatorTests: XCTestCase {
     }
 
     func testDismissDetectionClearsPendingApp() async {
-        let (coordinator, detection, _) = makeCoordinator(recording: MockRecordingService())
+        let (coordinator, detection, _, _, _) = makeCoordinator(recording: MockRecordingService())
         var detected: String? = "pending"
         coordinator.onDetectedAppNameChanged = { detected = $0 }
         coordinator.isRecording = { false }
@@ -109,9 +113,13 @@ final class DetectionCoordinatorTests: XCTestCase {
         let detection = MockMeetingDetectionService()
         let coordinator = MeetingDetectionCoordinator(
             detectionService: detection,
-            settings: settings,
-            startRecording: start,
-            stopRecording: stop)
+            settings: settings)
+        coordinator.onAutoRecord = { name in
+            _ = await start.execute(sourceApp: name, calendarEvent: nil)
+        }
+        coordinator.onAutoStop = {
+            _ = await stop.execute()
+        }
         coordinator.isRecording = { recording.isRecording }
         coordinator.isStartingRecording = { false }
         coordinator.start()
@@ -146,14 +154,10 @@ final class DetectionCoordinatorTests: XCTestCase {
         let detection = MockMeetingDetectionService()
         let coordinator = MeetingDetectionCoordinator(
             detectionService: detection,
-            settings: settings,
-            startRecording: StartRecordingUseCase(
-                recordingService: recording,
-                meetingRepository: meetings,
-                folderRepository: MeetingFolderStore(),
-                calendarRepository: MockCalendarRepository(),
-                settings: settings),
-            stopRecording: stop)
+            settings: settings)
+        coordinator.onAutoStop = {
+            _ = await stop.execute()
+        }
         coordinator.isRecording = { true }
         coordinator.isStartingRecording = { false }
         coordinator.start()

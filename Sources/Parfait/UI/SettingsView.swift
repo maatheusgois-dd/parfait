@@ -217,12 +217,15 @@ private struct GeneralSettings: View {
     }
 
     private var systemAudioOK: Bool? {
-        if systemAudioConfirmed || systemAudioStatus == .authorized { return true }
+        if systemAudioStatus == .authorized { return true }
         if systemAudioStatus == .denied { return false }
         return nil
     }
 
     private var systemAudioSettingsDetail: String {
+        if systemAudioConfirmed, systemAudioStatus != .authorized {
+            return "Previously captured call audio, but macOS no longer shows an active grant — click Grant to re-allow."
+        }
         if systemAudioConfirmed {
             return "Records the other participants. Confirmed capturing audio in a previous recording."
         }

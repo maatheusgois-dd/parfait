@@ -24,23 +24,37 @@ enum SystemAudioPermission {
         }
     }
 
+    static var statusLabel: String {
+        switch status() {
+        case .authorized: return "authorized"
+        case .denied: return "denied"
+        case .unknown: return "unknown"
+        }
+    }
+
     /// Presents the System Audio Recording consent dialog when status is unknown.
     /// Falls back to a brief Core Audio tap probe when TCC SPI is unavailable.
     @MainActor
     static func request() async {
+        let before = statusLabel
+        ParfaitConsoleLog.recording("system audio permission request (before=\(before))")
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
         if let request = requestSPI, status() == .unknown {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                request("kTCCServiceAudioCapture" as CFString, nil) { _ in
+                request("kTCCServiceAudioCapture" as CFString, nil) { granted in
+                    ParfaitConsoleLog.recording("system audio TCC callback granted=\(granted)")
                     continuation.resume()
                 }
             }
+            ParfaitConsoleLog.recording("system audio permission after TCC request=\(statusLabel)")
             return
         }
 
+        ParfaitConsoleLog.recording("system audio falling back to tap probe")
         await probeTap()
+        ParfaitConsoleLog.recording("system audio permission after probe=\(statusLabel)")
     }
 
     private static func probeTap() async {

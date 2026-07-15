@@ -73,6 +73,16 @@ final class LiveTranscriber: @unchecked Sendable {
     private var started = false
     private var stopped = false
 
+    /// Minimum tap peak that indicates remote speech is playing (headphone bleed proxy).
+    static let remoteSpeechPeakThreshold: Float = 0.015
+
+    /// When true, the Mac is using headphones/BT output while the mic is the
+    /// built-in — remote audio bleeds into the mic channel and needs aggressive dedup.
+    var headphoneBleedMode = false
+
+    /// Returns the current system-tap peak when available (headphone bleed mode).
+    var systemPeakProvider: (() -> Float)?
+
     init(startDate: Date, timeOffset: TimeInterval = 0) {
         self.startDate = startDate
         self.timeOffset = timeOffset
@@ -115,7 +125,18 @@ final class LiveTranscriber: @unchecked Sendable {
             return true
         }
         if !published { await Self.teardown([mic, system]) }
-        else { ParfaitConsoleLog.live("channels ready (mic + system)") }
+        else {
+            ParfaitConsoleLog.live(
+                "channels ready (mic + system) headphoneBleed=\(lock.withLock { headphoneBleedMode })")
+        }
+    }
+
+    /// Labels each channel's in-progress fragment for the live UI.
+    static func formattedVolatile(_ volatile: [String: String]) -> String {
+        speakers.compactMap { sp -> String? in
+            guard let text = volatile[sp.id], !text.isEmpty else { return nil }
+            return "\(sp.name): \(text)"
+        }.joined(separator: "\n")
     }
 
     func feedMic(_ buffer: AVAudioPCMBuffer) { feed(buffer, speakerID: Self.youSpeakerID) }
@@ -212,30 +233,65 @@ final class LiveTranscriber: @unchecked Sendable {
         let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
         let elapsed = max(0, Date().timeIntervalSince(startDate)) + timeOffset
         lock.lock()
+        let bleedMode = headphoneBleedMode
+        let systemPeak = systemPeakProvider?() ?? 0
+        var effectiveSpeaker = speakerID
+        if bleedMode, speakerID == Self.youSpeakerID, systemPeak >= Self.remoteSpeechPeakThreshold {
+            effectiveSpeaker = Self.othersSpeakerID
+        }
         if result.isFinal {
-            volatile[speakerID] = nil
+            volatile[effectiveSpeaker] = nil
+            if speakerID == Self.youSpeakerID, effectiveSpeaker != speakerID {
+                volatile[Self.youSpeakerID] = nil
+            }
             if !text.isEmpty {
-                // Insert in time order rather than re-sorting the whole (growing)
-                // transcript on every final result. New segments are almost always
-                // the latest, so the reverse scan is O(1) amortized vs. O(n log n).
+                if bleedMode, effectiveSpeaker == Self.youSpeakerID {
+                    let othersNear = finalized.contains {
+                        $0.speakerID == Self.othersSpeakerID
+                            && abs($0.start - elapsed) <= Self.liveEchoWindow
+                    }
+                    let othersLive = !(volatile[Self.othersSpeakerID] ?? "").isEmpty
+                    if othersNear || othersLive {
+                        ParfaitConsoleLog.live(
+                            "dropped mic bleed @ \(String(format: "%.1f", elapsed))s (others active): \(text.prefix(50))")
+                        let segments = finalized
+                        let vol = Self.formattedVolatile(volatile)
+                        let callback = onUpdate
+                        lock.unlock()
+                        callback?(segments, vol)
+                        return
+                    }
+                }
                 let seg = TranscriptSegment(
-                    speakerID: speakerID, start: elapsed, end: elapsed, text: text)
+                    speakerID: effectiveSpeaker, start: elapsed, end: elapsed, text: text)
                 var idx = finalized.count
                 while idx > 0, finalized[idx - 1].start > seg.start { idx -= 1 }
                 finalized.insert(seg, at: idx)
-                // On speakers (no headphones) the far end bleeds into the mic and
-                // gets transcribed a second time as "You"; the system tap holds the
-                // clean copy. Drop the echo so the live transcript and the MCP tool
-                // don't attribute the other person to us. Bidirectional and bounded
-                // to the window around the new segment, so cost stays O(k).
-                Self.removeEchoedMicSegments(
-                    around: seg.start, in: &finalized, window: Self.liveEchoWindow)
+                if bleedMode, effectiveSpeaker == Self.othersSpeakerID {
+                    Self.removeEchoedMicSegments(
+                        around: seg.start, in: &finalized, window: Self.liveEchoWindow, minCoverage: 0.35)
+                    Self.removeHeadphoneBleedMic(
+                        around: seg.start, othersText: text, in: &finalized, window: 3.0)
+                } else {
+                    Self.removeEchoedMicSegments(
+                        around: seg.start, in: &finalized, window: Self.liveEchoWindow)
+                }
+                if effectiveSpeaker != speakerID {
+                    ParfaitConsoleLog.live(
+                        "reattributed mic→them @ \(String(format: "%.1f", elapsed))s systemPeak=\(String(format: "%.4f", systemPeak)): \(text.prefix(80))")
+                } else {
+                    ParfaitConsoleLog.live(
+                        "final \(effectiveSpeaker) @ \(String(format: "%.1f", elapsed))s (\(finalized.count) segments): \(text.prefix(80))")
+                }
             }
         } else {
-            volatile[speakerID] = text.isEmpty ? nil : text
+            volatile[effectiveSpeaker] = text.isEmpty ? nil : text
+            if speakerID == Self.youSpeakerID, effectiveSpeaker != speakerID {
+                volatile[Self.youSpeakerID] = nil
+            }
         }
         let segments = finalized
-        let vol = Self.speakers.compactMap { volatile[$0.id] }.joined(separator: " … ")
+        let vol = Self.formattedVolatile(volatile)
         let callback = onUpdate
         lock.unlock()
         callback?(segments, vol)
@@ -259,7 +315,8 @@ final class LiveTranscriber: @unchecked Sendable {
     /// (coverage ~1.0), so the stricter bar still catches it while sparing a genuine
     /// local line that merely shares some vocabulary with a nearby far-end line.
     static func removeEchoedMicSegments(
-        around anchor: TimeInterval, in segments: inout [TranscriptSegment], window: TimeInterval
+        around anchor: TimeInterval, in segments: inout [TranscriptSegment], window: TimeInterval,
+        minCoverage: Double = 0.75
     ) {
         let lo = anchor - window
         let hi = anchor + window
@@ -274,8 +331,35 @@ final class LiveTranscriber: @unchecked Sendable {
             let seg = segments[i]
             if seg.speakerID == youSpeakerID, seg.start <= hi,
                TranscriptText.wordTokens(seg.text).count >= 4,
-               others.contains(where: { TranscriptText.covers(seg.text, by: $0.text, atLeast: 0.75) }) {
+               others.contains(where: { TranscriptText.covers(seg.text, by: $0.text, atLeast: minCoverage) }) {
                 segments.remove(at: i)
+            }
+            i -= 1
+        }
+    }
+
+    /// Headphone bleed: built-in mic hears BT output. Far-end lines often land on
+    /// the mic channel with a different transcript than the system tap, so timing
+    /// plus a small shared-vocabulary check catches them when verbatim dedup cannot.
+    static func removeHeadphoneBleedMic(
+        around anchor: TimeInterval, othersText: String, in segments: inout [TranscriptSegment],
+        window: TimeInterval, minOthersWords: Int = 4, minMicWords: Int = 4, minSharedWords: Int = 2
+    ) {
+        let othersWords = Set(TranscriptText.wordTokens(othersText))
+        guard othersWords.count >= minOthersWords else { return }
+        let lo = anchor - window
+        let hi = anchor + window
+        var i = segments.count - 1
+        while i >= 0 {
+            let seg = segments[i]
+            if seg.speakerID == youSpeakerID, seg.start >= lo, seg.start <= hi {
+                let micWords = TranscriptText.wordTokens(seg.text)
+                if micWords.count >= minMicWords {
+                    let shared = micWords.filter { othersWords.contains($0) }.count
+                    if shared >= minSharedWords {
+                        segments.remove(at: i)
+                    }
+                }
             }
             i -= 1
         }

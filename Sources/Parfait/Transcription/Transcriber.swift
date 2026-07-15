@@ -32,24 +32,95 @@ enum Transcriber {
     static func transcribeFile(at url: URL) async throws -> TranscriptionOutput {
         ParfaitConsoleLog.transcribe("file \(url.lastPathComponent)")
         let transcriber = try await makeTranscriber()
+        guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
+            compatibleWith: [transcriber])
+        else {
+            throw TranscriberError.modelUnavailable
+        }
 
         // Results must be consumed concurrently: the stream only terminates when the
         // session finishes, so awaiting it before feeding audio would deadlock.
         async let collected = collectResults(from: transcriber)
 
-        let audioFile = try AVAudioFile(forReading: url)
+        let audioFile = try await openReadableAudioFile(at: url)
         let analyzer = SpeechAnalyzer(modules: [transcriber])
-        guard let lastSampleTime = try await analyzer.analyzeSequence(from: audioFile) else {
+        let (inputStream, inputContinuation) = AsyncStream<AnalyzerInput>.makeStream()
+        let feedTask = Task {
+            defer { inputContinuation.finish() }
+            await feedAudioFile(audioFile, to: inputContinuation, analyzerFormat: analyzerFormat)
+        }
+
+        guard let lastSampleTime = try await analyzer.analyzeSequence(inputStream) else {
             await analyzer.cancelAndFinishNow()
+            feedTask.cancel()
+            _ = await feedTask.value
             throw TranscriberError.emptyAudio
         }
         // analyzeSequence returns when the file is read, not when analysis is done;
         // without this the results stream never terminates.
         try await analyzer.finalizeAndFinish(through: lastSampleTime)
+        _ = await feedTask.value
 
         let (segments, words) = try await collected
         ParfaitConsoleLog.transcribe("\(url.lastPathComponent) → \(segments.count) segments, \(words.count) words")
         return TranscriptionOutput(words: words.isEmpty ? segments : words, segments: segments)
+    }
+
+    /// Opens a finalized recording. AAC writers can take a beat to flush after stop(),
+    /// so a few short retries avoid spurious `dta?` / invalid-file errors.
+    private static func openReadableAudioFile(at url: URL) async throws -> AVAudioFile {
+        var lastError: Error?
+        for attempt in 0..<10 {
+            do {
+                let file = try AVAudioFile(forReading: url)
+                guard file.length > 0 else { throw TranscriberError.emptyAudio }
+                return file
+            } catch let error as TranscriberError {
+                throw error
+            } catch {
+                lastError = error
+                try await Task.sleep(for: .milliseconds(25 * (attempt + 1)))
+            }
+        }
+        throw lastError ?? TranscriberError.emptyAudio
+    }
+
+    /// Decodes the `.m4a` to PCM and converts to the analyzer's preferred format — the
+    /// same path the live transcriber uses. `analyzeSequence(from:)` rejects our AAC
+    /// container with avfaudio `dta?` even though the file plays fine elsewhere.
+    private static func feedAudioFile(
+        _ file: AVAudioFile,
+        to continuation: AsyncStream<AnalyzerInput>.Continuation,
+        analyzerFormat: AVAudioFormat
+    ) async {
+        let inputFormat = file.processingFormat
+        var converter: AVAudioConverter?
+        if inputFormat != analyzerFormat {
+            converter = AVAudioConverter(from: inputFormat, to: analyzerFormat)
+            converter?.primeMethod = .none
+        }
+
+        let chunkFrames: AVAudioFrameCount = 8192
+        guard let readBuffer = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: chunkFrames)
+        else { return }
+
+        while file.framePosition < file.length {
+            readBuffer.frameLength = 0
+            do {
+                try file.read(into: readBuffer)
+            } catch {
+                ParfaitConsoleLog.transcribe("read failed — \(error.localizedDescription)")
+                return
+            }
+            guard readBuffer.frameLength > 0 else { break }
+
+            if let converter, let converted = LiveTranscriber.convert(
+                readBuffer, with: converter, to: analyzerFormat) {
+                continuation.yield(AnalyzerInput(buffer: converted))
+            } else if let copy = LiveTranscriber.copy(readBuffer) {
+                continuation.yield(AnalyzerInput(buffer: copy))
+            }
+        }
     }
 
     private static func makeTranscriber() async throws -> SpeechTranscriber {

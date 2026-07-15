@@ -119,9 +119,7 @@ final class DependencyContainer {
 
         self.detectionCoordinator = MeetingDetectionCoordinator(
             detectionService: detectionService,
-            settings: settings,
-            startRecording: startRecording,
-            stopRecording: stopRecording)
+            settings: settings)
     }
 }
 

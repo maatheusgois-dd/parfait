@@ -49,6 +49,8 @@ struct Meeting: Codable, Identifiable, Equatable, Sendable {
     var summaryProvider: String?
     /// User-assigned folder; nil = unfiled (flat Meetings list).
     var folderID: UUID?
+    /// Transcript remote speakers were labeled from Zoom active-speaker events.
+    var platformSpeakerAttribution: Bool = false
 }
 
 struct MeetingFolder: Codable, Identifiable, Equatable, Sendable {
@@ -93,6 +95,11 @@ extension Meeting {
         guard !isRecording else { return false }
         guard state != .recording, state != .processing, state != .prep else { return false }
         return state == .failed || state == .ready
+    }
+
+    /// Whether auto-detection should append to this meeting instead of creating a new one.
+    func canResumeRecording(isRecording: Bool) -> Bool {
+        canStartFromPrep(isRecording: isRecording) || canContinueRecording(isRecording: isRecording)
     }
 
     /// Human-readable source for list subtitles (bundle IDs → app names).

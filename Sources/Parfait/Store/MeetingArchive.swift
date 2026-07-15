@@ -9,6 +9,7 @@ import Foundation
 ///         notes.md          user scratch notes (during recording)
 ///         mic.m4a           the user's microphone
 ///         system.m4a        everyone else (process tap)
+///         speaker_events.json  Zoom active-speaker timeline (optional)
 ///
 /// Thread-safe for the app's usage pattern: the UI goes through the
 /// @MainActor MeetingStore wrapper; the MCP server process is read-only.
@@ -164,6 +165,30 @@ final class MeetingArchive: @unchecked Sendable {
 
     func removeLiveTranscript(for id: UUID) {
         queue.sync { try? FileManager.default.removeItem(at: liveTranscriptURL(for: id)) }
+    }
+
+    // MARK: - Platform speaker events (Zoom active-speaker timeline)
+
+    func platformSpeakerEventsURL(for id: UUID) -> URL {
+        folder(for: id).appendingPathComponent("speaker_events.json")
+    }
+
+    func platformSpeakerEvents(for id: UUID) -> [PlatformSpeakerEvent] {
+        queue.sync {
+            guard let data = try? Data(contentsOf: platformSpeakerEventsURL(for: id)) else { return [] }
+            return (try? decoder.decode([PlatformSpeakerEvent].self, from: data)) ?? []
+        }
+    }
+
+    func savePlatformSpeakerEvents(_ events: [PlatformSpeakerEvent], for id: UUID) {
+        queue.sync {
+            guard let data = try? encoder.encode(events) else { return }
+            try? data.write(to: platformSpeakerEventsURL(for: id), options: .atomic)
+        }
+    }
+
+    func removePlatformSpeakerEvents(for id: UUID) {
+        queue.sync { try? FileManager.default.removeItem(at: platformSpeakerEventsURL(for: id)) }
     }
 
     // MARK: - Summary

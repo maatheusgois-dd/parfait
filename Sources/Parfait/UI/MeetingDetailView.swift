@@ -311,7 +311,19 @@ struct MeetingDetailView: View {
     private var notesSection: some View {
         VStack(alignment: shouldCenterEmptyNotes ? .center : .leading, spacing: 12) {
             if isRecordingThisMeeting {
-                recordingPlaceholder
+                if notesDraft != nil {
+                    notesEditor
+                } else if !displayed.isEmpty {
+                    if !showSideNotes, hasSideNotes {
+                        myNotesReader
+                            .padding(.bottom, 16)
+                    }
+                    notesReader
+                } else if streaming != nil || app.processingStage[meeting.id] != nil {
+                    emptyNotes
+                } else {
+                    recordingPlaceholder
+                }
             } else if isPrepMeeting {
                 prepPlaceholder
             } else if notesDraft != nil {
@@ -347,13 +359,13 @@ struct MeetingDetailView: View {
     private var recordingPlaceholder: some View {
         VStack(alignment: .leading, spacing: 8) {
             if showSideNotes {
-                Text("Your notes are in the panel on the left. Enhanced notes will appear here when you stop recording.")
+                Text("Enhanced notes will appear here as the meeting is summarized. The live transcript is in the Transcript panel below.")
                     .font(.parfait(13))
                     .foregroundStyle(Theme.tertiary(scheme))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 40)
             } else {
-                Text("Write notes")
+                Text("Enhanced notes will appear here. Open My notes on the left, or use the Transcript panel below for the live transcript.")
                     .font(.parfait(14))
                     .foregroundStyle(Theme.tertiary(scheme))
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -476,33 +488,28 @@ struct MeetingDetailView: View {
         .fixedSize()
     }
 
+    private var hasTranscript: Bool {
+        !app.store.transcript(for: meeting.id).isEmpty
+    }
+
     @ViewBuilder
     private var noticeBanner: some View {
-        if let notice = meeting.notice, !emptyNotesHandlesNotice {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Label(notice, systemImage: "exclamationmark.triangle")
-                    .font(.parfait(12))
-                    .foregroundStyle(.orange)
-                Spacer(minLength: 8)
-                if canContinueRecording {
-                    Button("Resume recording") {
-                        Task { await app.continueRecording(meetingID: meeting.id) }
-                    }
-                    .controlSize(.small)
-                } else {
-                    Button(meeting.state == .failed ? "Retry" : "Regenerate") {
-                        Task { await app.retry(meetingID: meeting.id) }
-                    }
-                    .controlSize(.small)
-                }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
+        if let notice = meeting.notice,
+           !emptyNotesHandlesNotice,
+           let presentation = MeetingNotice.effectivePresentation(
+               for: notice, hasTranscript: hasTranscript) {
+            MeetingNoticeBanner(
+                presentation: presentation,
+                primaryActionTitle: noticePrimaryActionTitle,
+                primaryActionIcon: noticePrimaryActionIcon,
+                primaryAction: noticePrimaryAction)
         } else if case .failed(let why) = publishState {
-            Label(why, systemImage: "xmark.circle")
-                .font(.parfait(12))
-                .foregroundStyle(.orange)
+            MeetingNoticeBanner(
+                presentation: MeetingNotice.Presentation(
+                    title: "Couldn't publish",
+                    message: why,
+                    systemImage: "xmark.circle",
+                    isEmptyTranscript: false))
         }
     }
 
@@ -519,38 +526,60 @@ struct MeetingDetailView: View {
             && displayed.isEmpty
             && streaming == nil
             && app.processingStage[meeting.id] == nil
-            && meeting.notice != nil
+            && noticePresentation != nil
     }
 
     private var emptyNotesTitle: String {
-        if isEmptyTranscriptNotice { return "No speech captured" }
-        if meeting.notice != nil { return "Couldn't generate notes" }
-        return "No notes yet"
-    }
-
-    private var isEmptyTranscriptNotice: Bool {
-        guard let notice = meeting.notice else { return false }
-        return notice.localizedCaseInsensitiveContains("empty")
-            || notice.localizedCaseInsensitiveContains("nothing to summarize")
-            || notice.localizedCaseInsensitiveContains("no audio could be transcribed")
+        noticePresentation?.title ?? "No notes yet"
     }
 
     private var emptyNotesMessage: String {
-        if isEmptyTranscriptNotice {
-            if meeting.duration > 0 {
-                let duration = TemplateRenderer.duration(meeting.duration)
-                if hasSideNotes {
-                    return "Parfait recorded \(duration) but didn't detect speech. Your notes are in My notes — resume recording if the call is still going."
+        if let presentation = noticePresentation {
+            if presentation.isEmptyTranscript {
+                if meeting.duration > 0 {
+                    let duration = TemplateRenderer.duration(meeting.duration)
+                    if hasSideNotes {
+                        return "Parfait recorded \(duration) but didn't detect speech. Your notes are in My notes — resume recording if the call is still going."
+                    }
+                    return "Parfait recorded \(duration) but didn't detect speech. Resume if the meeting is still live, or write notes manually."
                 }
-                return "Parfait recorded \(duration) but didn't detect speech. Resume if the meeting is still live, or write notes manually."
+                if hasSideNotes {
+                    return "Nothing was transcribed, but you have notes in My notes. Resume recording if the call is still going."
+                }
             }
-            if hasSideNotes {
-                return "Nothing was transcribed, but you have notes in My notes. Resume recording if the call is still going."
-            }
-            return "Nothing was transcribed from this recording. Resume if the meeting is still live, or write notes manually."
+            return presentation.message
         }
-        if let notice = meeting.notice { return notice }
         return "Notes appear here once transcription finishes."
+    }
+
+    private var isEmptyTranscriptNotice: Bool {
+        MeetingNotice.effectivePresentation(for: meeting.notice, hasTranscript: hasTranscript)?
+            .isEmptyTranscript == true
+    }
+
+    private var noticePresentation: MeetingNotice.Presentation? {
+        MeetingNotice.effectivePresentation(for: meeting.notice, hasTranscript: hasTranscript)
+    }
+
+    private var noticePrimaryActionTitle: String? {
+        if canContinueRecording { return "Resume recording" }
+        if meeting.state == .failed { return "Retry" }
+        if meeting.notice != nil { return "Regenerate" }
+        return nil
+    }
+
+    private var noticePrimaryActionIcon: String? {
+        canContinueRecording ? "mic.fill" : nil
+    }
+
+    private var noticePrimaryAction: (() -> Void)? {
+        if canContinueRecording {
+            return { Task { await app.continueRecording(meetingID: meeting.id) } }
+        }
+        if meeting.state == .failed || meeting.notice != nil {
+            return { Task { await app.retry(meetingID: meeting.id) } }
+        }
+        return nil
     }
 
     private var emptyNotesTips: [String] {

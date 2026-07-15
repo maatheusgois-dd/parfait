@@ -120,7 +120,7 @@ struct OpenCalendarEventUseCase {
 
     func execute(_ event: CalendarEventSummary) async -> Outcome {
         if let existing = calendarRepository.meetingForCalendarEvent(
-            event.id, in: meetingRepository.meetings) {
+            event, in: meetingRepository.meetings) {
             return .openExisting(existing.id)
         }
         switch prepareMeeting.execute(calendarEvent: event) {

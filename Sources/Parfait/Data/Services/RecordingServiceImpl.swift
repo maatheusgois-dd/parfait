@@ -25,25 +25,39 @@ final class RecordingServiceImpl: RecordingService {
         guard !isRecording, !isStartingRecording else { return .failure(.alreadyRecording) }
         _isStartingRecording = true
         defer { _isStartingRecording = false }
+        ParfaitConsoleLog.recording("start requested source=\(sourceApp ?? "manual") calendar=\(calendarEvent?.title ?? "none")")
 
         if !MicRecorder.permissionGranted {
             _ = await MicRecorder.requestPermission()
+        }
+
+        let resolvedCalendarEvent = await resolveCalendarEvent(
+            calendarEvent: calendarEvent,
+            sourceApp: sourceApp,
+            calendarRepository: calendarRepository,
+            settings: settings)
+
+        if let event = resolvedCalendarEvent,
+           let existing = calendarRepository.meetingForCalendarEvent(
+               event, in: meetingRepository.meetings),
+           existing.canResumeRecording(isRecording: false) {
+            ParfaitConsoleLog.recording("resuming existing meeting for calendar event \"\(event.title)\"")
+            return await continueRecording(meetingID: existing.id, meetingRepository: meetingRepository)
         }
 
         var meeting = Meeting(title: Meeting.placeholderTitle(for: Date()), createdAt: Date())
         meeting.sourceApp = sourceApp
         meeting.templateName = settings.defaultTemplate
 
-        if let calendarEvent {
-            applyCalendarEvent(calendarEvent, to: &meeting)
-        } else if settings.useCalendar, CalendarAuthorization.isAuthorized,
-                  let event = await calendarRepository.currentEvent(at: .now, sourceApp: sourceApp) {
-            applyCalendarEvent(event, to: &meeting)
+        if let resolvedCalendarEvent {
+            applyCalendarEvent(resolvedCalendarEvent, to: &meeting)
+            ParfaitConsoleLog.recording("matched calendar \"\(resolvedCalendarEvent.title)\" (\(resolvedCalendarEvent.attendees.count) attendees)")
         }
 
         if let title = meeting.calendarEventTitle,
            let folder = folderRepository.folder(forTitle: title) {
             meeting.folderID = folder.id
+            ParfaitConsoleLog.recording("auto-folder \"\(folder.name)\"")
         }
 
         guard !isRecording else { return .failure(.alreadyRecording) }
@@ -57,12 +71,15 @@ final class RecordingServiceImpl: RecordingService {
     ) async -> Result<RecordingSessionHandle, RecordingError> {
         guard !isRecording, !isStartingRecording else { return .failure(.alreadyRecording) }
         guard var meeting = meetingRepository.meeting(id: meetingID) else {
+            ParfaitConsoleLog.recording("continue failed — meeting not found")
             return .failure(.meetingNotFound)
         }
         let fromPrep = meeting.canStartFromPrep(isRecording: false)
         guard fromPrep || meeting.canContinueRecording(isRecording: false) else {
+            ParfaitConsoleLog.recording("continue failed — meeting \(meetingID.uuidString.prefix(8)) not resumable")
             return .failure(.cannotContinue)
         }
+        ParfaitConsoleLog.recording("continue \(meetingID.uuidString.prefix(8)) fromPrep=\(fromPrep) duration=\(Int(meeting.duration))s")
 
         _isStartingRecording = true
         defer { _isStartingRecording = false }
@@ -78,6 +95,7 @@ final class RecordingServiceImpl: RecordingService {
                 try? FileManager.default.removeItem(at: url)
             }
             archive.removeLiveTranscript(for: meetingID)
+            archive.removePlatformSpeakerEvents(for: meetingID)
         }
 
         meeting.state = .recording
@@ -85,7 +103,10 @@ final class RecordingServiceImpl: RecordingService {
         meetingRepository.upsert(meeting)
 
         let newSession = RecordingSession(
-            meetingID: meeting.id, archive: archive, elapsedOffset: meeting.duration)
+            meetingID: meeting.id,
+            archive: archive,
+            elapsedOffset: meeting.duration,
+            sourceApp: meeting.sourceApp)
         do {
             try newSession.start(
                 micURL: archive.micURL(for: meeting.id),
@@ -94,17 +115,20 @@ final class RecordingServiceImpl: RecordingService {
             meeting.state = .failed
             meeting.notice = error.localizedDescription
             meetingRepository.upsert(meeting)
+            ParfaitConsoleLog.recording("continue session start failed — \(error.localizedDescription)")
             return .failure(.sessionStartFailed(error.localizedDescription))
         }
         meeting.notice = newSession.startupNotice
         meetingRepository.upsert(meeting)
         currentSession = newSession
         recordingMeeting = meeting
+        ParfaitConsoleLog.recording("continue started \(meetingID.uuidString.prefix(8)) notice=\(newSession.startupNotice ?? "none")")
         return .success(RecordingSessionHandle(session: newSession, meeting: meeting))
     }
 
     func stop() -> (session: RecordingSession, meeting: Meeting)? {
         guard let session = currentSession, let meeting = recordingMeeting else { return nil }
+        ParfaitConsoleLog.recording("stop \(meeting.id.uuidString.prefix(8)) elapsed=\(Int(session.elapsed))s")
         clear()
         session.stop()
         return (session, meeting)
@@ -112,6 +136,7 @@ final class RecordingServiceImpl: RecordingService {
 
     func discard() -> (session: RecordingSession, meeting: Meeting)? {
         guard let session = currentSession, let meeting = recordingMeeting else { return nil }
+        ParfaitConsoleLog.recording("discard \(meeting.id.uuidString.prefix(8))")
         clear()
         session.stop()
         return (session, meeting)
@@ -119,6 +144,7 @@ final class RecordingServiceImpl: RecordingService {
 
     func prepareForTermination(meetingRepository: MeetingRepository) {
         guard let session = currentSession, let meeting = recordingMeeting else { return }
+        ParfaitConsoleLog.recording("app terminating — finalizing \(meeting.id.uuidString.prefix(8))")
         session.stop()
         if var fresh = meetingRepository.meeting(id: meeting.id) ?? recordingMeeting {
             fresh.duration = session.elapsed
@@ -136,16 +162,21 @@ final class RecordingServiceImpl: RecordingService {
         do {
             try archive.createFolder(for: meeting.id)
         } catch {
+            ParfaitConsoleLog.recording("archive folder creation failed — \(error.localizedDescription)")
             return .failure(.archiveCreationFailed(error.localizedDescription))
         }
 
-        let newSession = RecordingSession(meetingID: meeting.id, archive: archive)
+        let newSession = RecordingSession(
+            meetingID: meeting.id,
+            archive: archive,
+            sourceApp: meeting.sourceApp)
         do {
             try newSession.start(
                 micURL: archive.micURL(for: meeting.id),
                 systemURL: archive.systemURL(for: meeting.id))
         } catch {
             try? FileManager.default.removeItem(at: archive.folder(for: meeting.id))
+            ParfaitConsoleLog.recording("session start failed — \(error.localizedDescription)")
             return .failure(.sessionStartFailed(error.localizedDescription))
         }
         var saved = meeting
@@ -153,12 +184,24 @@ final class RecordingServiceImpl: RecordingService {
         meetingRepository.upsert(saved)
         currentSession = newSession
         recordingMeeting = saved
+        ParfaitConsoleLog.recording("started \(meeting.id.uuidString.prefix(8)) title=\"\(meeting.title)\" notice=\(newSession.startupNotice ?? "none")")
         return .success(RecordingSessionHandle(session: newSession, meeting: saved))
     }
 
     private func clear() {
         currentSession = nil
         recordingMeeting = nil
+    }
+
+    private func resolveCalendarEvent(
+        calendarEvent: CalendarEventSummary?,
+        sourceApp: String?,
+        calendarRepository: CalendarRepository,
+        settings: SettingsRepository
+    ) async -> CalendarEventSummary? {
+        if let calendarEvent { return calendarEvent }
+        guard settings.useCalendar, CalendarAuthorization.isAuthorized else { return nil }
+        return await calendarRepository.currentEvent(at: .now, sourceApp: sourceApp)
     }
 
     private func applyCalendarEvent(_ event: CalendarEventSummary, to meeting: inout Meeting) {
@@ -184,6 +227,7 @@ final class NotificationServiceImpl: NotificationService, @unchecked Sendable {
         NotificationCenterDelegate.shared.onReadyTapped = onReadyTapped
         center.requestAuthorization(options: [.alert, .sound]) { granted, error in
             self.log.info("notification auth granted=\(granted) error=\(error?.localizedDescription ?? "none", privacy: .public)")
+            ParfaitConsoleLog.notification("auth granted=\(granted) error=\(error?.localizedDescription ?? "none")")
         }
     }
 
@@ -198,6 +242,7 @@ final class NotificationServiceImpl: NotificationService, @unchecked Sendable {
 
     func notifyMeetingReady(_ meeting: Meeting) {
         guard Bundle.main.bundleIdentifier != nil else { return }
+        ParfaitConsoleLog.notification("meeting ready \"\(meeting.title)\" (\(meeting.id.uuidString.prefix(8)))")
         let content = UNMutableNotificationContent()
         content.title = meeting.title
         content.body = "Your meeting notes are ready."
@@ -209,6 +254,7 @@ final class NotificationServiceImpl: NotificationService, @unchecked Sendable {
     func playDetectionChime() {
         guard Bundle.main.bundleIdentifier != nil else { return }
         if detectionChime?.isPlaying == true { return }
+        ParfaitConsoleLog.notification("detection chime")
         let sound = NSSound(named: NSSound.Name("Ping"))
         detectionChime = sound
         sound?.play()

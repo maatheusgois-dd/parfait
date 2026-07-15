@@ -100,6 +100,9 @@ struct GranolaFloatingPanel: View {
         .padding(.bottom, 16)
         .animation(.spring(response: 0.32, dampingFraction: 0.86), value: mode)
         .onAppear { refreshAskAvailability() }
+        .onReceive(NotificationCenter.default.publisher(for: .parfaitCLIAvailabilityChanged)) { _ in
+            refreshAskAvailability()
+        }
         .onChange(of: preferredAIProvider) { refreshAskAvailability() }
         .onChange(of: mode) { _, newMode in
             if newMode != .transcript {
@@ -146,6 +149,16 @@ struct GranolaFloatingPanel: View {
                     draft: $transcriptDraft,
                     searchQuery: transcriptSearch)
                     .frame(height: 260)
+            }
+
+            if meeting.platformSpeakerAttribution {
+                Text("Speaker identification is in beta and may not always be accurate.")
+                    .font(.parfait(10))
+                    .foregroundStyle(Theme.tertiary(scheme))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 4)
             }
 
             transcriptFooter
@@ -410,9 +423,11 @@ struct GranolaFloatingPanel: View {
             Image(systemName: "chevron.down")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Theme.tertiary(scheme))
-                .frame(width: 24, height: 24)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .padding(.trailing, -12)
         .help("Collapse panel")
     }
 
@@ -749,7 +764,11 @@ struct GranolaLiveTranscriptContent: View {
     }
 
     private func name(for speakerID: String) -> String {
-        speakers.first(where: { $0.id == speakerID })?.name
+        if speakerID == LiveTranscriber.othersSpeakerID,
+           let active = session.activeRemoteSpeaker {
+            return active
+        }
+        return speakers.first(where: { $0.id == speakerID })?.name
             ?? LiveTranscriber.name(for: speakerID)
     }
 }

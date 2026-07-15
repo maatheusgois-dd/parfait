@@ -44,6 +44,8 @@ struct ClaudeCLI {
     // bootstrap() warms the full resolution in the background.
     private static let cacheLock = NSLock()
     nonisolated(unsafe) private static var cachedResolution: URL??
+    private static let authCacheLock = NSLock()
+    nonisolated(unsafe) private static var cachedLoggedIn: Bool?
     private static let processLock = NSLock()
     nonisolated(unsafe) private static var runningProcess: Process?
 
@@ -115,7 +117,30 @@ struct ClaudeCLI {
         return dir
     }
 
+    /// Shells out to `claude auth status`. Never blocks the main thread — UI reads
+    /// the warmed cache (false until bootstrap/refresh completes).
+    static func warmAuthCache() {
+        let loggedIn = probeLoggedIn()
+        authCacheLock.lock()
+        cachedLoggedIn = loggedIn
+        authCacheLock.unlock()
+    }
+
     static func isLoggedIn() -> Bool {
+        if Thread.isMainThread {
+            authCacheLock.lock()
+            let cached = cachedLoggedIn
+            authCacheLock.unlock()
+            return cached ?? false
+        }
+        let loggedIn = probeLoggedIn()
+        authCacheLock.lock()
+        cachedLoggedIn = loggedIn
+        authCacheLock.unlock()
+        return loggedIn
+    }
+
+    private static func probeLoggedIn() -> Bool {
         guard let cli = resolveBlocking() else { return false }
         let process = Process()
         process.executableURL = cli

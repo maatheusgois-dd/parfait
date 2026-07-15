@@ -2,14 +2,14 @@ import AppKit
 import Foundation
 import SwiftUI
 
-/// Ring buffer of AI/summarization diagnostics shown in Settings → Intelligence.
+/// Ring buffer of diagnostics shown in Settings → Debug (when Developer mode is on).
 @MainActor
 final class AIDebugLog: ObservableObject {
     static let shared = AIDebugLog()
 
     @Published private(set) var lines: [String] = []
 
-    private static let maxLines = 500
+    private static let maxLines = 1000
     private static let formatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss"
@@ -32,8 +32,9 @@ final class AIDebugLog: ObservableObject {
         lines.removeAll()
     }
 
-    /// Safe to call from background tasks (e.g. the processing pipeline).
+    /// Safe to call from any thread. No-op unless Developer mode is enabled.
     nonisolated static func log(_ message: String) {
+        guard AppSettings.developerMode else { return }
         Task { @MainActor in
             shared.append(message)
         }
@@ -48,6 +49,11 @@ struct AIDebugLogPanel: View {
             HStack {
                 Text("Debug logs").font(.parfait(12, .medium))
                 Spacer()
+                Button("Clear") { log.clear() }
+                    .buttonStyle(.plain)
+                    .font(.parfait(11))
+                    .foregroundStyle(Theme.blueberry)
+                    .disabled(log.allText.isEmpty)
                 Button("Copy All") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(log.allText, forType: .string)
@@ -59,7 +65,7 @@ struct AIDebugLogPanel: View {
             }
             ScrollView {
                 Text(log.allText.isEmpty
-                     ? "Summarization and assistant activity will appear here."
+                     ? "Activity from recording, Zoom speaker tracking, transcription, and AI appears here. Filter Console.app with subsystem io.github.conrad-vanl.Parfait."
                      : log.allText)
                     .font(.system(size: 10, design: .monospaced))
                     .textSelection(.enabled)
@@ -82,7 +88,7 @@ struct AIDebugLogButton: View {
         .buttonStyle(.plain)
         .font(.parfait(12))
         .foregroundStyle(Theme.blueberry)
-        .help("AI debug logs")
+        .help("Debug logs")
         .popover(isPresented: $isPresented, arrowEdge: .top) {
             AIDebugLogPanel()
                 .frame(width: 420, height: 240)

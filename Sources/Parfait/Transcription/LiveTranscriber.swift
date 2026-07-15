@@ -81,13 +81,19 @@ final class LiveTranscriber: @unchecked Sendable {
     /// Sets up both channels. Throws only if no transcriber model is available at
     /// all (the caller then simply skips live transcription — recording is
     /// unaffected). Safe to call once.
-    func start(locale: Locale) async throws {
+    func start() async throws {
         let alreadyStarted = lock.withLock { let was = started; started = true; return was }
         guard !alreadyStarted else { return }
 
         guard SpeechTranscriber.isAvailable,
-              let resolved = await SpeechTranscriber.supportedLocale(equivalentTo: locale)
-        else { throw TranscriberError.modelUnavailable }
+              let resolved = await TranscriptionLocales.primary()
+        else {
+            ParfaitConsoleLog.live("unavailable — speech model not ready")
+            throw TranscriberError.modelUnavailable
+        }
+
+        ParfaitConsoleLog.live("starting locale=\(resolved.identifier(.bcp47)) offset=\(Int(timeOffset))s")
+        try await TranscriptionLocales.ensureModels()
 
         // Channel setup can block for a while on first-run model asset download. If
         // the second channel fails to build, tear down the first rather than leak it.
@@ -109,6 +115,7 @@ final class LiveTranscriber: @unchecked Sendable {
             return true
         }
         if !published { await Self.teardown([mic, system]) }
+        else { ParfaitConsoleLog.live("channels ready (mic + system)") }
     }
 
     func feedMic(_ buffer: AVAudioPCMBuffer) { feed(buffer, speakerID: Self.youSpeakerID) }
@@ -126,6 +133,8 @@ final class LiveTranscriber: @unchecked Sendable {
     /// so a still-in-flight start() tears down rather than publishes its channels.
     func stop() async {
         let chans = lock.withLock { stopped = true; let c = channels; channels = []; return c }
+        let count = lock.withLock { finalized.count }
+        ParfaitConsoleLog.live("stopping — \(count) finalized segments")
         await Self.teardown(chans)
     }
 
@@ -177,7 +186,7 @@ final class LiveTranscriber: @unchecked Sendable {
                     self?.handle(result, speakerID: speakerID)
                 }
             } catch {
-                // A live approximation: a stream error just ends this channel.
+                ParfaitConsoleLog.live("\(speakerID) stream error — \(error.localizedDescription)")
             }
         }
 

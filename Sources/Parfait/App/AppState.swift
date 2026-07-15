@@ -6,6 +6,11 @@ import os
 import SwiftUI
 import UserNotifications
 
+extension Notification.Name {
+    /// Posted after bootstrap warms Claude/Codex auth caches off the main thread.
+    static let parfaitCLIAvailabilityChanged = Notification.Name("ParfaitCLIAvailabilityChanged")
+}
+
 @MainActor
 final class AppState: NSObject, ObservableObject {
     static let shared: AppState = {
@@ -38,8 +43,8 @@ final class AppState: NSObject, ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
 
-    func meetingForCalendarEvent(_ eventID: String) -> Meeting? {
-        container.calendarRepository.meetingForCalendarEvent(eventID, in: store.meetings)
+    func meetingForCalendarEvent(_ event: CalendarEventSummary) -> Meeting? {
+        container.calendarRepository.meetingForCalendarEvent(event, in: store.meetings)
     }
 
     var isRecording: Bool { session != nil }
@@ -109,6 +114,7 @@ final class AppState: NSObject, ObservableObject {
     }
 
     func bootstrap() {
+        ParfaitConsoleLog.app("bootstrap starting")
         container.notificationService.configure { [weak self] id in
             Task { @MainActor in
                 self?.openMeetingID = id
@@ -118,12 +124,24 @@ final class AppState: NSObject, ObservableObject {
         Task.detached {
             _ = ClaudeCLI.resolveBlocking()
             _ = CodexCLI.resolveBlocking()
+            ClaudeCLI.warmAuthCache()
+            CodexCLI.warmAuthCache()
+            await MainActor.run {
+                ParfaitConsoleLog.app("CLI availability refreshed")
+                NotificationCenter.default.post(name: .parfaitCLIAvailabilityChanged, object: nil)
+            }
         }
         Task { @MainActor in
             await Task.detached { SystemAudioTap.destroyLeftoverAggregates() }.value
-            if container.settings.detectMeetings { startDetection() }
+            if container.settings.detectMeetings {
+                ParfaitConsoleLog.app("starting meeting detection")
+                startDetection()
+            }
             await calendar.refreshAgenda()
             notificationAuthStatus = await container.notificationService.refreshAuthorizationStatus()
+            ParfaitConsoleLog.app(
+                "bootstrap done — meetings=\(store.meetings.count) calendarAuth=\(CalendarAuthorization.isAuthorized)"
+                    + " detect=\(container.settings.detectMeetings)")
         }
     }
 
@@ -136,18 +154,22 @@ final class AppState: NSObject, ObservableObject {
     // MARK: - Detection
 
     func startDetection() {
+        ParfaitConsoleLog.detection("AppState.startDetection")
         container.detectionCoordinator.start()
     }
 
     func stopDetection() {
+        ParfaitConsoleLog.detection("AppState.stopDetection")
         container.detectionCoordinator.stop()
     }
 
     func acceptDetection() async {
         lastError = nil
         resetRecordingCardState()
+        let appName = detectedAppName
+        container.detectionCoordinator.dismissDetection()
         switch await container.startRecording.execute(
-            sourceApp: detectedAppName,
+            sourceApp: appName,
             calendarEvent: nil) {
         case .success(let handle):
             applyRecordingHandle(handle)
@@ -169,24 +191,39 @@ final class AppState: NSObject, ObservableObject {
     ) async {
         lastError = nil
         resetRecordingCardState()
+        let resolvedSource = sourceApp ?? inferredMeetingSource()
         container.detectionCoordinator.dismissDetection()
         switch await container.startRecording.execute(
-            sourceApp: sourceApp,
+            sourceApp: resolvedSource,
             calendarEvent: calendarEvent) {
         case .success(let handle):
             applyRecordingHandle(handle)
         case .failure(let error):
             lastError = error.localizedDescription
+            ParfaitConsoleLog.recording("start failed — \(error.localizedDescription)")
         }
     }
 
+    /// Manual starts still tag Zoom/Teams when that app is on the mic.
+    private func inferredMeetingSource() -> String? {
+        guard !activeMicAppNames.isEmpty else { return nil }
+        let inferred = MeetingDetector.inferSourceApp(from: activeMicAppNames)
+        if let inferred {
+            ParfaitConsoleLog.recording(
+                "inferred source=\(inferred) from active mic [\(activeMicAppNames.joined(separator: ", "))]")
+        }
+        return inferred
+    }
+
     func stopRecording() async {
+        ParfaitConsoleLog.recording("AppState.stopRecording")
         session = nil
         recordingMeeting = nil
         _ = await container.stopRecording.execute()
     }
 
     func discardRecording() {
+        ParfaitConsoleLog.recording("AppState.discardRecording")
         session = nil
         recordingMeeting = nil
         container.discardRecording.execute()
@@ -228,6 +265,7 @@ final class AppState: NSObject, ObservableObject {
     private func applyRecordingHandle(_ handle: RecordingSessionHandle) {
         session = handle.session
         recordingMeeting = handle.meeting
+        openMeetingID = handle.meeting.id
     }
 
     private func resetRecordingCardState() {
@@ -265,7 +303,11 @@ final class AppState: NSObject, ObservableObject {
     }
 
     private func finalizeOrphans() {
-        for meeting in store.meetings where meeting.state == .recording || meeting.state == .processing {
+        let orphans = store.meetings.filter { $0.state == .recording || $0.state == .processing }
+        if !orphans.isEmpty {
+            ParfaitConsoleLog.processing("finalizing \(orphans.count) orphan meeting(s)")
+        }
+        for meeting in orphans {
             var m = meeting
             if m.duration == 0 {
                 m.duration = audioDuration(archive: store.archive, id: m.id)

@@ -34,6 +34,7 @@ final class MeetingDetector: @unchecked Sendable {
         queue.async {
             guard self.systemListener == nil else { return }
             self.log.info("detector starting")
+            ParfaitConsoleLog.detection("Core Audio detector starting")
             self.onEvent = onEvent
             var listAddr = Self.address(kAudioHardwarePropertyProcessObjectList)
             let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
@@ -71,6 +72,7 @@ final class MeetingDetector: @unchecked Sendable {
             self.processListeners.removeAll()
             self.lastState.removeAll()
             self.onEvent = nil
+            ParfaitConsoleLog.detection("Core Audio detector stopped")
         }
     }
 
@@ -112,6 +114,21 @@ final class MeetingDetector: @unchecked Sendable {
         if let name = event.appName { return name }
         if let bundleID = event.bundleID { return bundleID }
         return "PID \(event.pid)"
+    }
+
+    /// When the user starts recording manually, pick the app currently on the mic.
+    static func inferSourceApp(from activeNames: [String]) -> String? {
+        let priority = ["Zoom", "Microsoft Teams", "Google Meet", "Slack", "Webex", "FaceTime"]
+        for key in priority {
+            if let match = activeNames.first(where: { $0.localizedCaseInsensitiveContains(key) }) {
+                return match
+            }
+        }
+        return activeNames.first
+    }
+
+    static func isZoomSource(_ sourceApp: String?) -> Bool {
+        sourceApp?.lowercased().contains("zoom") == true
     }
 
     // MARK: - Internals (all on `queue`)
@@ -166,6 +183,7 @@ final class MeetingDetector: @unchecked Sendable {
         let app = NSRunningApplication(processIdentifier: pid)
         let bundleID = object.flatMap(readBundleID) ?? app?.bundleIdentifier
         log.debug("emit pid=\(pid) bundleID=\(bundleID ?? "nil", privacy: .public) running=\(running)")
+        ParfaitConsoleLog.detection("emit pid=\(pid) bundle=\(bundleID ?? "?") running=\(running)")
         onEvent?(MicEvent(
             pid: pid,
             bundleID: bundleID,

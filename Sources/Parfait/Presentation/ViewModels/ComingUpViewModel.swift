@@ -29,8 +29,8 @@ final class ComingUpViewModel: ObservableObject {
         agenda = calendarRepository.agenda
     }
 
-    func meetingForEvent(_ eventID: String) -> Meeting? {
-        calendarRepository.meetingForCalendarEvent(eventID, in: meetingRepository.meetings)
+    func meetingForEvent(_ event: CalendarEventSummary) -> Meeting? {
+        calendarRepository.meetingForCalendarEvent(event, in: meetingRepository.meetings)
     }
 
     func openEvent(_ event: CalendarEventSummary) async {

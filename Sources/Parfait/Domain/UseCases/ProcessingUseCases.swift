@@ -23,6 +23,7 @@ final class ProcessMeetingUseCase {
 
     func execute(_ meeting: Meeting) async {
         let id = meeting.id
+        ParfaitConsoleLog.processing("start \(id.uuidString.prefix(8)) \"\(meeting.title)\" state=\(meeting.state)")
         onProgress?(id, "Starting…")
         var entry = meetingRepository.meeting(id: id) ?? meeting
         entry.state = .processing
@@ -34,6 +35,7 @@ final class ProcessMeetingUseCase {
             let merged = existing + Self.offsetSegments(live, by: offset)
             meetingRepository.saveTranscript(merged, for: id)
             if existing.isEmpty { entry.speakers = LiveTranscriber.speakers }
+            ParfaitConsoleLog.processing("merged \(live.count) live segments into transcript")
         }
         meetingRepository.upsert(entry)
         let titleAtEntry = entry.title
@@ -53,10 +55,14 @@ final class ProcessMeetingUseCase {
         meetingRepository.archive.removeLiveTranscript(for: id)
 
         guard var fresh = meetingRepository.meeting(id: id) else { return }
+        guard fresh.state == .processing else { return }
         fresh.state = outcome.state
         fresh.notice = outcome.notice
         if let speakers = outcome.speakers {
             fresh.speakers = Self.merging(pipelineSpeakers: speakers, userSpeakers: fresh.speakers)
+        }
+        if outcome.platformSpeakerAttribution {
+            fresh.platformSpeakerAttribution = true
         }
         if let provider = outcome.summaryProvider { fresh.summaryProvider = provider }
         if let title = outcome.generatedTitle, fresh.title == titleAtEntry {
@@ -64,7 +70,10 @@ final class ProcessMeetingUseCase {
         }
         meetingRepository.upsert(fresh)
         if fresh.state == .ready {
+            ParfaitConsoleLog.processing("done \(id.uuidString.prefix(8)) → ready provider=\(fresh.summaryProvider ?? "?")")
             notificationService.notifyMeetingReady(fresh)
+        } else {
+            ParfaitConsoleLog.processing("done \(id.uuidString.prefix(8)) → \(fresh.state) notice=\(fresh.notice ?? "none")")
         }
     }
 
@@ -125,6 +134,7 @@ final class RegenerateSummaryUseCase {
 
     func execute(meetingID: UUID, templateName: String? = nil) async {
         guard var entry = meetingRepository.meeting(id: meetingID) else { return }
+        ParfaitConsoleLog.processing("regenerate \(meetingID.uuidString.prefix(8)) template=\(templateName ?? entry.templateName ?? "default")")
         if let templateName {
             entry.templateName = templateName
             meetingRepository.upsert(entry)
@@ -165,6 +175,7 @@ final class RegenerateSummaryUseCase {
             }
         case .failure(let why):
             fresh.notice = why
+            ParfaitConsoleLog.processing("regenerate failed — \(why)")
         }
         meetingRepository.upsert(fresh)
     }
@@ -179,6 +190,7 @@ struct RetryMeetingUseCase {
 
     func execute(meetingID: UUID) async {
         guard var meeting = meetingRepository.meeting(id: meetingID) else { return }
+        ParfaitConsoleLog.processing("retry \(meetingID.uuidString.prefix(8)) state=\(meeting.state)")
         if meeting.state == .failed || meetingRepository.transcript(for: meetingID).isEmpty {
             meeting.notice = nil
             meetingRepository.upsert(meeting)

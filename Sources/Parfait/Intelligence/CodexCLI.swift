@@ -30,6 +30,8 @@ struct CodexCLI {
 
     private static let cacheLock = NSLock()
     nonisolated(unsafe) private static var cachedResolution: URL??
+    private static let authCacheLock = NSLock()
+    nonisolated(unsafe) private static var cachedLoggedIn: Bool?
     private static let processLock = NSLock()
     nonisolated(unsafe) private static var runningProcess: Process?
 
@@ -128,7 +130,34 @@ struct CodexCLI {
         return !access.isEmpty
     }
 
+    static func warmAuthCache() {
+        let loggedIn = probeLoggedIn()
+        authCacheLock.lock()
+        cachedLoggedIn = loggedIn
+        authCacheLock.unlock()
+    }
+
     static func isLoggedIn() -> Bool {
+        if authFromDisk() {
+            authCacheLock.lock()
+            cachedLoggedIn = true
+            authCacheLock.unlock()
+            return true
+        }
+        if Thread.isMainThread {
+            authCacheLock.lock()
+            let cached = cachedLoggedIn
+            authCacheLock.unlock()
+            return cached ?? false
+        }
+        let loggedIn = probeLoggedIn()
+        authCacheLock.lock()
+        cachedLoggedIn = loggedIn
+        authCacheLock.unlock()
+        return loggedIn
+    }
+
+    private static func probeLoggedIn() -> Bool {
         if authFromDisk() { return true }
         guard let cli = resolveBlocking() else { return false }
         let sh = Process()

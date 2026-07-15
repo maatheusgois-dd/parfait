@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -9,14 +10,17 @@ final class RecordingSession: ObservableObject {
     let startedAt = Date()
     /// Elapsed time already on the meeting before this session (continue recording).
     private let elapsedOffset: TimeInterval
+    private let sourceApp: String?
 
     @Published private(set) var elapsed: TimeInterval = 0
-    @Published private(set) var micLevel: Float = 0
+    @Published private(set) var micBarLevels: [Float] = Array(repeating: 0, count: 12)
     /// Rolling live transcript (finalized segments) + the current in-progress
     /// fragment, updated in real time while recording. A convenience surface — the
     /// accurate, diarized transcript is still produced post-hoc by the batch pipeline.
     @Published private(set) var liveSegments: [TranscriptSegment] = []
     @Published private(set) var volatileText: String = ""
+    /// Display name of whoever Zoom marks as the active remote speaker, when known.
+    @Published private(set) var activeRemoteSpeaker: String?
     private(set) var micStarted = false
     private(set) var systemStarted = false
 
@@ -24,8 +28,10 @@ final class RecordingSession: ObservableObject {
     private let tap = SystemAudioTap()
     private let archive: MeetingArchive
     private var liveTranscriber: LiveTranscriber?
+    private var zoomSpeakerTracker: ZoomSpeakerTracker?
     private var lastLivePersist = Date.distantPast
     private var ticker: Timer?
+    private var activeObserver: NSObjectProtocol?
 
     enum SessionError: LocalizedError {
         case nothingStarted(String)
@@ -37,13 +43,21 @@ final class RecordingSession: ObservableObject {
         }
     }
 
-    init(meetingID: UUID, archive: MeetingArchive, elapsedOffset: TimeInterval = 0) {
+    init(
+        meetingID: UUID,
+        archive: MeetingArchive,
+        elapsedOffset: TimeInterval = 0,
+        sourceApp: String? = nil
+    ) {
         self.meetingID = meetingID
         self.archive = archive
         self.elapsedOffset = elapsedOffset
+        self.sourceApp = sourceApp
     }
 
     func start(micURL: URL, systemURL: URL) throws {
+        ParfaitConsoleLog.recording(
+            "start meeting=\(meetingID.uuidString.prefix(8)) offset=\(Int(elapsedOffset))s source=\(sourceApp ?? "manual") accessibility=\(AccessibilityPermission.isTrusted)")
         var problems: [String] = []
 
         // Live transcription runs alongside capture. Set the buffer sinks BEFORE
@@ -55,8 +69,8 @@ final class RecordingSession: ObservableObject {
         }
         liveTranscriber = live
 
-        mic.levelHandler = { [weak self] level in
-            Task { @MainActor in self?.micLevel = level }
+        mic.levelHandler = { [weak self] levels in
+            Task { @MainActor in self?.micBarLevels = levels }
         }
         mic.bufferSink = { [weak live] buffer in live?.feedMic(buffer) }
         do {
@@ -74,11 +88,32 @@ final class RecordingSession: ObservableObject {
             problems.append("system audio: \(error.localizedDescription)")
         }
         guard micStarted || systemStarted else {
+            ParfaitConsoleLog.recording("failed to start — \(problems.joined(separator: "; "))")
             throw SessionError.nothingStarted(problems.joined(separator: "; "))
         }
+        ParfaitConsoleLog.recording("capture mic=\(micStarted) system=\(systemStarted) live=starting")
 
         // Model/asset setup is async; buffers fed before it's ready are dropped.
-        Task { try? await live.start(locale: .current) }
+        Task {
+            do {
+                try await live.start()
+                ParfaitConsoleLog.recording("live transcription ready")
+            } catch {
+                ParfaitConsoleLog.recording("live transcription unavailable — \(error.localizedDescription)")
+            }
+        }
+
+        if shouldTrackZoomSpeakers() {
+            ParfaitConsoleLog.recording("Zoom speaker tracker \(AccessibilityPermission.isTrusted ? "starting" : "waiting for Accessibility")")
+            ensureZoomTracker()
+            activeObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.ensureZoomTracker() }
+            }
+        }
 
         ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -109,17 +144,33 @@ final class RecordingSession: ObservableObject {
 
     /// Returns the parts that had problems starting, for the meeting notice.
     var startupNotice: String? {
+        var parts: [String] = []
         switch (micStarted, systemStarted) {
-        case (true, true): return nil
-        case (false, true): return "Microphone wasn't recorded (permission missing?) — only the other side of the call was captured."
-        case (true, false): return "System audio wasn't recorded — only your microphone was captured. Grant System Audio Recording in Privacy & Security."
-        case (false, false): return nil
+        case (true, true): break
+        case (false, true):
+            parts.append("Microphone wasn't recorded (permission missing?) — only the other side of the call was captured.")
+        case (true, false):
+            parts.append("System audio wasn't recorded — only your microphone was captured. Grant System Audio Recording in Privacy & Security.")
+        case (false, false): break
         }
+        if shouldTrackZoomSpeakers(), !AccessibilityPermission.isTrusted {
+            parts.append("Enable Accessibility for Parfait in Privacy & Security to label Zoom speakers by name.")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     func stop() {
+        ParfaitConsoleLog.recording("stop meeting=\(meetingID.uuidString.prefix(8)) elapsed=\(Int(elapsed))s liveSegments=\(liveSegments.count)")
         ticker?.invalidate()
         ticker = nil
+        if let activeObserver {
+            NotificationCenter.default.removeObserver(activeObserver)
+            self.activeObserver = nil
+        }
+        zoomSpeakerTracker?.stop()
+        zoomSpeakerTracker = nil
+        activeRemoteSpeaker = nil
+        micBarLevels = Array(repeating: 0, count: 12)
         if micStarted { mic.stop() }
         if systemStarted { tap.stop() }
         if let live = liveTranscriber {
@@ -130,7 +181,49 @@ final class RecordingSession: ObservableObject {
             Task {
                 await live.stop()
                 archive.saveLiveTranscript(liveSegments, for: meetingID)
+                ParfaitConsoleLog.recording("live transcript flushed (\(liveSegments.count) segments)")
             }
         }
+    }
+
+    private static func isZoom(_ sourceApp: String?) -> Bool {
+        MeetingDetector.isZoomSource(sourceApp)
+    }
+
+    /// Zoom speaker tracking when source is Zoom, or Zoom's meeting UI is visible via AX.
+    private func shouldTrackZoomSpeakers() -> Bool {
+        if Self.isZoom(sourceApp) { return true }
+        guard AccessibilityPermission.isTrusted else { return false }
+        let scan = ZoomActiveSpeakerReader.scan()
+        guard scan.zoomPID != nil, !scan.roster.isEmpty else { return false }
+        ParfaitConsoleLog.zoom(
+            "inferred Zoom meeting from AX roster [\(scan.roster.joined(separator: ", "))] despite source=\(sourceApp ?? "manual")")
+        return true
+    }
+
+    /// Starts (or resumes) the Zoom tracker once Accessibility trust is granted.
+    private func ensureZoomTracker() {
+        guard shouldTrackZoomSpeakers() else {
+            ParfaitConsoleLog.zoom(
+                "ensureZoomTracker skipped source=\(sourceApp ?? "manual") accessibility=\(AccessibilityPermission.isTrusted)")
+            return
+        }
+        if zoomSpeakerTracker != nil {
+            ParfaitConsoleLog.zoom("ensureZoomTracker — already running")
+            return
+        }
+        ParfaitConsoleLog.zoom(
+            "ensureZoomTracker — creating tracker accessibility=\(AccessibilityPermission.isTrusted)")
+        let tracker = ZoomSpeakerTracker(
+            meetingID: meetingID,
+            archive: archive,
+            startDate: startedAt,
+            elapsedOffset: elapsedOffset)
+        tracker.onActiveSpeaker = { [weak self] name in
+            ParfaitConsoleLog.zoom("UI activeRemoteSpeaker=\(name ?? "nil")")
+            self?.activeRemoteSpeaker = name
+        }
+        zoomSpeakerTracker = tracker
+        tracker.start()
     }
 }

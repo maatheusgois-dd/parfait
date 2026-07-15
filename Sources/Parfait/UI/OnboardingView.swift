@@ -9,6 +9,7 @@ struct OnboardingView: View {
     @AppStorage(SettingsKey.didCompleteOnboarding) private var didCompleteOnboarding = false
     @AppStorage(SettingsKey.systemAudioConfirmed) private var systemAudioConfirmed = false
     @State private var systemAudioStatus = SystemAudioPermission.status()
+    @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
 
     @State private var micStatus = MicRecorder.permissionGranted
     @State private var calendarStatus = CalendarAuthorization.isAuthorized
@@ -33,6 +34,7 @@ struct OnboardingView: View {
                 VStack(spacing: 12) {
                     micRow
                     systemAudioRow
+                    accessibilityRow
                     notificationsRow
                     calendarRow
                     claudeRow
@@ -56,6 +58,7 @@ struct OnboardingView: View {
         .background(Theme.surface(scheme))
         .onAppear {
             systemAudioStatus = SystemAudioPermission.status()
+            accessibilityTrusted = AccessibilityPermission.isTrusted
             micStatus = MicRecorder.permissionGranted
             calendarStatus = CalendarAuthorization.isAuthorized
             claudeInstalled = ClaudeCLI.isInstalled
@@ -69,6 +72,7 @@ struct OnboardingView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             systemAudioStatus = SystemAudioPermission.status()
+            accessibilityTrusted = AccessibilityPermission.isTrusted
         }
     }
 
@@ -134,6 +138,25 @@ struct OnboardingView: View {
             return "Denied — enable Parfait under System Audio Recording Only in Settings."
         case .unknown:
             return "Records the other participants. Click Grant — macOS will ask to allow system audio recording."
+        }
+    }
+
+    private var accessibilityRow: some View {
+        OnboardingStepRow(
+            icon: "person.wave.2.fill",
+            title: "Accessibility",
+            required: false,
+            detail: accessibilityTrusted
+                ? "Allowed — Parfait can read Zoom's active speaker to label who said what."
+                : "Optional — labels Zoom speakers by name instead of Speaker 1 / Speaker 2. Click Grant and enable Parfait in Settings.",
+            ok: accessibilityTrusted
+        ) {
+            if !accessibilityTrusted {
+                Button("Grant…") {
+                    AccessibilityPermission.request()
+                }
+                .controlSize(.small)
+            }
         }
     }
 

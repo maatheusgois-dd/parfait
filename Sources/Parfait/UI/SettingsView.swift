@@ -4,6 +4,8 @@ import SwiftUI
 import UserNotifications
 
 struct SettingsView: View {
+    @AppStorage(SettingsKey.developerMode) private var developerMode = false
+
     var body: some View {
         TabView {
             GeneralSettings()
@@ -16,6 +18,10 @@ struct SettingsView: View {
                 .tabItem { Label("Calendar", systemImage: "calendar") }
             AppearanceSettings()
                 .tabItem { Label("Appearance", systemImage: "paintbrush") }
+            if developerMode {
+                DebugSettings()
+                    .tabItem { Label("Debug", systemImage: "ladybug") }
+            }
         }
         .frame(width: 560, height: 520)
     }
@@ -34,8 +40,10 @@ private struct GeneralSettings: View {
 
     @State private var micStatus = MicRecorder.permissionGranted
     @AppStorage(SettingsKey.openMainWindowAtLaunch) private var openMainWindowAtLaunch = true
+    @AppStorage(SettingsKey.developerMode) private var developerMode = false
     @State private var launchAtLogin = LaunchAtLogin.isOn
     @State private var systemAudioStatus = SystemAudioPermission.status()
+    @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
 
     var body: some View {
         Form {
@@ -135,6 +143,24 @@ private struct GeneralSettings: View {
                     }
                 }
                 HStack(alignment: .firstTextBaseline) {
+                    StatusDot(ok: accessibilityTrusted)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Accessibility").font(.parfait(12, .medium))
+                        Text(accessibilitySettingsDetail)
+                            .font(.parfait(11))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if !accessibilityTrusted {
+                        Button("Grant…") { AccessibilityPermission.request() }
+                            .controlSize(.small)
+                        Button("Open Settings") {
+                            NSWorkspace.shared.open(AccessibilityPermission.privacySettingsURL)
+                        }
+                        .controlSize(.small)
+                    }
+                }
+                HStack(alignment: .firstTextBaseline) {
                     StatusDot(ok: app.notificationAuthStatus == .authorized
                                ? true : (app.notificationAuthStatus == .denied ? false : nil))
                     VStack(alignment: .leading, spacing: 2) {
@@ -157,16 +183,37 @@ private struct GeneralSettings: View {
                 }
                 .task { await app.refreshNotificationStatus() }
             }
+
+            Section {
+                Toggle("Developer mode", isOn: $developerMode)
+                    .onChange(of: developerMode) {
+                        ParfaitConsoleLog.app("developer mode \(developerMode ? "enabled" : "disabled")")
+                        if developerMode {
+                            ParfaitConsoleLog.app("debug logging active — stderr + Debug tab")
+                        }
+                    }
+                Text("Shows a Debug tab with diagnostics and experimental options.")
+                    .font(.parfait(11))
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .onAppear {
             micStatus = MicRecorder.permissionGranted
             launchAtLogin = LaunchAtLogin.isOn
             systemAudioStatus = SystemAudioPermission.status()
+            accessibilityTrusted = AccessibilityPermission.isTrusted
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             systemAudioStatus = SystemAudioPermission.status()
+            accessibilityTrusted = AccessibilityPermission.isTrusted
         }
+    }
+
+    private var accessibilitySettingsDetail: String {
+        accessibilityTrusted
+            ? "Allowed — reads Zoom's active speaker to label who said what in the transcript."
+            : "Optional — labels Zoom speakers by name. Click Grant, then enable Parfait under Accessibility."
     }
 
     private var systemAudioOK: Bool? {
@@ -401,7 +448,7 @@ private struct IntelligenceSettings: View {
                 statusRow(
                     ok: true,
                     title: "Speech transcription",
-                    detail: "Apple's on-device speech model. Language packs download automatically on first use.")
+                    detail: "Apple's on-device speech model. English and Brazilian Portuguese are prepared automatically; other system languages download on first use.")
             }
 
             Section("Your Claude account") {
@@ -502,13 +549,6 @@ private struct IntelligenceSettings: View {
                     connectAIContent
                 }
             }
-
-            Section {
-                HStack {
-                    Spacer()
-                    AIDebugLogButton()
-                }
-            }
         }
         .formStyle(.grouped)
         .onAppear {
@@ -532,18 +572,18 @@ private struct IntelligenceSettings: View {
     }
 
     private func logAssistantStatus() {
-        AIDebugLog.log("── Intelligence settings ──")
-        AIDebugLog.log("Assistant: \(preferredAIProvider.displayName)")
-        AIDebugLog.log("Always use cloud for summaries: \(preferClaudeSummaries) (cloud-only when on)")
+        ParfaitConsoleLog.intelligence("── Intelligence settings ──")
+        ParfaitConsoleLog.intelligence("Assistant: \(preferredAIProvider.displayName)")
+        ParfaitConsoleLog.intelligence("Always use cloud for summaries: \(preferClaudeSummaries) (cloud-only when on)")
         if AppleSummarizer.isAvailable {
-            AIDebugLog.log("Apple Intelligence: available")
+            ParfaitConsoleLog.intelligence("Apple Intelligence: available")
         } else {
-            AIDebugLog.log("Apple Intelligence: \(AppleSummarizer.unavailableReason ?? "unavailable")")
+            ParfaitConsoleLog.intelligence("Apple Intelligence: \(AppleSummarizer.unavailableReason ?? "unavailable")")
         }
-        AIDebugLog.log(
+        ParfaitConsoleLog.intelligence(
             "Claude: \(claudeInstalled ? "installed" : "not installed")"
                 + (claudeInstalled ? ", \(claudeLoggedIn ? "logged in" : "not logged in")" : ""))
-        AIDebugLog.log(
+        ParfaitConsoleLog.intelligence(
             "Codex: \(codexInstalled ? "installed" : "not installed")"
                 + (codexInstalled ? ", \(codexLoggedIn ? "logged in" : "not logged in")" : "")
                 + ", ready: \(CodexCLI.isReady)")
@@ -897,6 +937,18 @@ private struct AppearanceSettings: View {
                 Text("Used for Record, Save, and other prominent buttons. Adjusted automatically for readable labels in each theme.")
                     .font(.parfait(11))
                     .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+private struct DebugSettings: View {
+    var body: some View {
+        Form {
+            Section("Logs") {
+                AIDebugLogPanel()
+                    .frame(minHeight: 320)
             }
         }
         .formStyle(.grouped)

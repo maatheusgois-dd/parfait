@@ -112,6 +112,9 @@ struct AILauncherView: View {
         }
         .background(Theme.surface(scheme))
         .onAppear { refreshAvailability() }
+        .onReceive(NotificationCenter.default.publisher(for: .parfaitCLIAvailabilityChanged)) { _ in
+            refreshAvailability()
+        }
         .onChange(of: preferredAIProvider) {
             refreshAvailability()
             if isAnswering { stopAnswering() }

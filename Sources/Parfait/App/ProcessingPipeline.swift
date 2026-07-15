@@ -11,6 +11,7 @@ enum ProcessingPipeline {
         var state: MeetingState
         var notice: String?
         var speakers: [Speaker]?
+        var platformSpeakerAttribution: Bool = false
         var summaryProvider: String?
         var generatedTitle: String?
     }
@@ -47,6 +48,9 @@ enum ProcessingPipeline {
         //    after Stop (streamed token by token) while the accurate transcript is
         //    still being built. A failed draft just falls through to the batch pass.
         let liveSegments = archive.liveTranscript(for: id)
+        ParfaitConsoleLog.pipeline(
+            "run meeting=\(id.uuidString.prefix(8)) title=\"\(meeting.title)\" mic=\(hasMic) system=\(hasSystem)"
+                + " live=\(liveSegments.count) prior=\(priorSegments.count) duration=\(Int(meeting.duration))s")
         let liveText = TranscriptFormatter.plainText(liveSegments, speakers: LiveTranscriber.speakers)
         let priorText = priorSegments.isEmpty
             ? ""
@@ -58,6 +62,7 @@ enum ProcessingPipeline {
         var draft: (text: String, provider: String)?
         let userNotes = archive.sideNotes(for: id)
         if !draftInput.isEmpty {
+            ParfaitConsoleLog.pipeline("drafting from live transcript (\(draftInput.count) chars)")
             onSummary(.streaming(""))
             switch await summarize(
                 meeting: meeting, transcript: draftInput, userNotes: userNotes,
@@ -71,10 +76,13 @@ enum ProcessingPipeline {
                     draft = (text, provider)
                     outcome.summaryProvider = provider
                     onSummary(.draftSaved)
+                    ParfaitConsoleLog.pipeline("draft saved via \(provider) (\(text.count) chars)")
                 } catch {
+                    ParfaitConsoleLog.pipeline("draft save failed — \(error.localizedDescription)")
                     onSummary(.done)
                 }
             case .failure:
+                ParfaitConsoleLog.pipeline("draft summarization failed")
                 // No draft — clear the transient streaming UI so it doesn't linger
                 // through transcription; the batch pass will write the notes.
                 onSummary(.done)
@@ -83,7 +91,7 @@ enum ProcessingPipeline {
 
         // 1. Transcribe.
         onProgress("Preparing speech model…")
-        try? await Transcriber.ensureModel(locale: .current, progress: { fraction in
+        try? await Transcriber.ensureModel(progress: { fraction in
             onProgress("Downloading speech model… \(Int(fraction * 100))%")
         })
 
@@ -91,13 +99,19 @@ enum ProcessingPipeline {
         var systemOut: TranscriptionOutput?
         if hasMic {
             onProgress("Transcribing your microphone…")
-            do { micOut = try await Transcriber.transcribeFile(at: micURL, locale: .current) }
-            catch { notices.append("Mic transcription failed: \(error.localizedDescription)") }
+            do { micOut = try await Transcriber.transcribeFile(at: micURL) }
+            catch {
+                notices.append(MeetingNotice.micTranscriptionFailed)
+                ParfaitConsoleLog.pipeline("mic transcription failed — \(error.localizedDescription)")
+            }
         }
         if hasSystem {
             onProgress("Transcribing the call audio…")
-            do { systemOut = try await Transcriber.transcribeFile(at: systemURL, locale: .current) }
-            catch { notices.append("Call transcription failed: \(error.localizedDescription)") }
+            do { systemOut = try await Transcriber.transcribeFile(at: systemURL) }
+            catch {
+                notices.append(MeetingNotice.callTranscriptionFailed)
+                ParfaitConsoleLog.pipeline("system transcription failed — \(error.localizedDescription)")
+            }
         }
 
         guard micOut != nil || systemOut != nil else {
@@ -111,15 +125,32 @@ enum ProcessingPipeline {
             onSummary(.done)
             outcome.state = (draft == nil && priorSegments.isEmpty) ? .failed : .ready
             outcome.summaryProvider = draft?.provider
+            let hasTranscriptContent = !priorSegments.isEmpty || !liveSegments.isEmpty || draft != nil
             outcome.notice = notices.isEmpty
-                ? ((draft == nil && priorSegments.isEmpty) ? "No audio could be transcribed." : nil)
-                : notices.joined(separator: " ")
+                ? ((draft == nil && priorSegments.isEmpty) ? MeetingNotice.noAudioTranscribed : nil)
+                : MeetingNotice.finalizedNotice(notices, hasTranscriptContent: hasTranscriptContent)
+            ParfaitConsoleLog.pipeline("run finished state=\(outcome.state) (no audio transcribed)")
             return outcome
         }
 
-        // 2. Speakers.
+        // 2. Speakers — prefer a Zoom active-speaker timeline when we captured one.
         var turns: [DiarizedTurn]?
-        if AppSettings.identifySpeakers, let out = systemOut, !out.segments.isEmpty {
+        var namedSpeakers = false
+        let platformEvents = archive.platformSpeakerEvents(for: id)
+            .filter { !ZoomActiveSpeakerReader.isLocalParticipant($0.name) }
+        let platformTurns = PlatformSpeakerTurnBuilder.turns(
+            from: PlatformSpeakerTurnBuilder.normalized(platformEvents))
+        ParfaitConsoleLog.pipeline(
+            "speakers meeting=\(id.uuidString.prefix(8)) platformEvents=\(platformEvents.count) identifySpeakers=\(AppSettings.identifySpeakers)")
+        if !platformTurns.isEmpty {
+            onProgress("Labeling speakers from Zoom…")
+            turns = platformTurns
+            namedSpeakers = true
+            outcome.platformSpeakerAttribution = true
+            ParfaitConsoleLog.pipeline(
+                "using Zoom timeline: \(platformTurns.map { "\($0.speaker) \(String(format: "%.1f", $0.start))-\(String(format: "%.1f", $0.end))" }.joined(separator: ", "))")
+        } else if AppSettings.identifySpeakers, let out = systemOut, !out.segments.isEmpty {
+            ParfaitConsoleLog.pipeline("falling back to on-device diarization")
             onProgress("Identifying speakers…")
             do {
                 turns = try await Diarizer.diarize(
@@ -130,12 +161,19 @@ enum ProcessingPipeline {
                     // voice stay split into "Speaker 1" + "Speaker 2" on a 1:1.
                     maxSpeakers: meeting.attendees.isEmpty ? nil : meeting.attendees.count)
             }
-            catch { notices.append("Speaker identification unavailable: \(error.localizedDescription)") }
+            catch {
+                notices.append(MeetingNotice.speakerIdentificationUnavailable)
+                ParfaitConsoleLog.pipeline("diarization failed — \(error.localizedDescription)")
+            }
         }
 
         let myName = NSFullUserName().isEmpty ? "Me" : NSFullUserName()
         let (segments, speakers) = SpeakerLabeler.label(
-            mic: micOut, system: systemOut, systemTurns: turns, myName: myName)
+            mic: micOut,
+            system: systemOut,
+            systemTurns: turns,
+            myName: myName,
+            namedSpeakers: namedSpeakers)
         let offsetSegments = Self.offsetSegments(segments, by: appendOffset)
         let mergedSegments = priorSegments + offsetSegments
         try? archive.saveTranscript(mergedSegments, for: id)
@@ -189,7 +227,12 @@ enum ProcessingPipeline {
         }
 
         onSummary(.done)
-        outcome.notice = notices.isEmpty ? nil : notices.joined(separator: " ")
+        let hasTranscriptContent = !mergedSegments.isEmpty
+        outcome.notice = MeetingNotice.finalizedNotice(notices, hasTranscriptContent: hasTranscriptContent)
+        ParfaitConsoleLog.pipeline(
+            "run finished meeting=\(id.uuidString.prefix(8)) state=\(outcome.state)"
+                + " segments=\(mergedSegments.count) speakers=\(outcome.speakers?.count ?? 0)"
+                + (outcome.generatedTitle.map { " title=\"\($0)\"" } ?? ""))
         return outcome
     }
 
@@ -304,7 +347,7 @@ enum ProcessingPipeline {
                 return .success(result.text, provider: "claude")
             } catch {
                 claudeError = error.localizedDescription
-                AIDebugLog.log("claude: \(error.localizedDescription)")
+                ParfaitConsoleLog.intelligence("claude: \(error.localizedDescription)")
                 return nil
             }
         }
@@ -317,7 +360,7 @@ enum ProcessingPipeline {
                 return .success(result.text, provider: "codex")
             } catch {
                 codexError = error.localizedDescription
-                AIDebugLog.log("codex: \(error.localizedDescription)")
+                ParfaitConsoleLog.intelligence("codex: \(error.localizedDescription)")
                 return nil
             }
         }
@@ -356,51 +399,51 @@ enum ProcessingPipeline {
         let modeLabel = preferred.isCloud && cloudReady
             ? (AppSettings.preferClaudeSummaries ? " · cloud-only" : " · cloud-first")
             : ""
-        AIDebugLog.log(
+        ParfaitConsoleLog.intelligence(
             "summarize: \(transcript.count) chars · preferred \(preferred.displayName)\(modeLabel)"
                 + " · order: \(orderNames.joined(separator: " → "))")
 
         for (name, engine) in zip(orderNames, order) {
-            AIDebugLog.log("summarize: trying \(name)…")
+            ParfaitConsoleLog.intelligence("summarize: trying \(name)…")
             if let outcome = await engine() {
                 if case .success(_, let provider) = outcome {
-                    AIDebugLog.log("summarize: succeeded via \(provider)")
+                    ParfaitConsoleLog.intelligence("summarize: succeeded via \(provider)")
                 }
                 return outcome
             }
-            AIDebugLog.log("summarize: \(name) unavailable or failed")
+            ParfaitConsoleLog.intelligence("summarize: \(name) unavailable or failed")
         }
 
         if preferred == .apple {
             let reason = AppleSummarizer.unavailableReason ?? "Apple Intelligence is unavailable"
-            AIDebugLog.log("summarize: failed — \(reason)")
+            ParfaitConsoleLog.intelligence("summarize: failed — \(reason)")
             return .failure("\(reason) — transcript saved, summary skipped. Enable Apple Intelligence and press Regenerate.")
         }
         if preferred == .codex, let codexError {
-            AIDebugLog.log("summarize: failed via Codex — \(codexError)")
+            ParfaitConsoleLog.intelligence("summarize: failed via Codex — \(codexError)")
             return .failure("Summary failed via Codex: \(codexError)")
         }
         if let claudeError {
-            AIDebugLog.log("summarize: failed via Claude — \(claudeError)")
+            ParfaitConsoleLog.intelligence("summarize: failed via Claude — \(claudeError)")
             return .failure("Summary failed via Claude: \(claudeError)")
         }
         let cloudName = preferred.displayName
         let reason = AppleSummarizer.unavailableReason ?? "Apple Intelligence is unavailable"
-        AIDebugLog.log("summarize: failed — \(reason); \(cloudName) not ready")
+        ParfaitConsoleLog.intelligence("summarize: failed — \(reason); \(cloudName) not ready")
         return .failure("\(reason), and \(cloudName) isn't ready — transcript saved, summary skipped. Fix either one and press Regenerate.")
     }
 
     static func generateTitle(summary: String, provider: String) async -> String? {
-        AIDebugLog.log("title: generating via \(provider)")
+        ParfaitConsoleLog.intelligence("title: generating via \(provider)")
         if provider == "apple", let title = try? await AppleSummarizer.generateTitle(fromSummary: summary) {
-            AIDebugLog.log("title: Apple Intelligence → \"\(title)\"")
+            ParfaitConsoleLog.intelligence("title: Apple Intelligence → \"\(title)\"")
             return cleaned(title)
         }
         if provider == "codex", CodexCLI.isInstalled,
            let result = try? await CodexCLI.run(
                prompt: "Reply with only a specific 3–8 word title for the meeting with these notes, no quotes:\n\n\(String(summary.prefix(2000)))"
            ) {
-            AIDebugLog.log("title: Codex → \"\(result.text)\"")
+            ParfaitConsoleLog.intelligence("title: Codex → \"\(result.text)\"")
             return cleaned(result.text)
         }
         if ClaudeCLI.isInstalled,
@@ -408,10 +451,10 @@ enum ProcessingPipeline {
                prompt: "Reply with only a specific 3–8 word title for the meeting with these notes, no quotes:\n\n\(String(summary.prefix(2000)))",
                model: "haiku"
            ) {
-            AIDebugLog.log("title: Claude → \"\(result.text)\"")
+            ParfaitConsoleLog.intelligence("title: Claude → \"\(result.text)\"")
             return cleaned(result.text)
         }
-        AIDebugLog.log("title: no engine produced a title")
+        ParfaitConsoleLog.intelligence("title: no engine produced a title")
         return nil
     }
 

@@ -118,6 +118,10 @@ struct LiveTranscriptReaderView: View {
     }
 
     private func name(for speakerID: String) -> String {
+        if speakerID == LiveTranscriber.othersSpeakerID,
+           let active = session.activeRemoteSpeaker {
+            return active
+        }
         if let speaker = speakers.first(where: { $0.id == speakerID }) {
             return speaker.name
         }

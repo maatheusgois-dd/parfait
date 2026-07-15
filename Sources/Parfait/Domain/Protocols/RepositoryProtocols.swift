@@ -59,7 +59,7 @@ protocol CalendarRepository: AnyObject {
     func refreshAgenda(now: Date, horizonDays: Int?) async
     func currentEvent(at now: Date, sourceApp: String?) async -> CalendarEventSummary?
     func countdownText(for event: CalendarEventSummary) -> String?
-    func meetingForCalendarEvent(_ eventID: String, in meetings: [Meeting]) -> Meeting?
+    func meetingForCalendarEvent(_ event: CalendarEventSummary, in meetings: [Meeting]) -> Meeting?
 }
 
 // MARK: - Template

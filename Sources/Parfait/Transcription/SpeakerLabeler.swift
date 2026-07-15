@@ -8,7 +8,8 @@ enum SpeakerLabeler {
         mic: TranscriptionOutput?,
         system: TranscriptionOutput?,
         systemTurns: [DiarizedTurn]?,
-        myName: String
+        myName: String,
+        namedSpeakers: Bool = false
     ) -> (segments: [TranscriptSegment], speakers: [Speaker]) {
         var segments: [TranscriptSegment] = []
         var speakers: [Speaker] = []
@@ -24,7 +25,8 @@ enum SpeakerLabeler {
         }
 
         if let system {
-            let (systemSegments, systemSpeakers) = labelSystem(system, turns: systemTurns)
+            let (systemSegments, systemSpeakers) = labelSystem(
+                system, turns: systemTurns, namedSpeakers: namedSpeakers)
             segments.append(contentsOf: systemSegments)
             speakers.append(contentsOf: systemSpeakers)
         }
@@ -38,12 +40,18 @@ enum SpeakerLabeler {
         // transcribed a second time under "me"; drop those echoed duplicates.
         let deduped = dropEchoedMic(merged)
         let present = Set(deduped.map(\.speakerID))
-        return (deduped, speakers.filter { present.contains($0.id) })
+        let speakersOut = speakers.filter { present.contains($0.id) }
+        let mode = namedSpeakers ? "Zoom names"
+            : (systemTurns != nil ? "diarized" : "flat")
+        ParfaitConsoleLog.pipeline(
+            "labeled \(deduped.count) segments, \(speakersOut.count) speakers (\(mode)): \(speakersOut.map(\.name).joined(separator: ", "))")
+        return (deduped, speakersOut)
     }
 
     private static func labelSystem(
         _ system: TranscriptionOutput,
-        turns: [DiarizedTurn]?
+        turns: [DiarizedTurn]?,
+        namedSpeakers: Bool
     ) -> ([TranscriptSegment], [Speaker]) {
         guard let turns, !turns.isEmpty else {
             let segs = system.segments.map {
@@ -78,7 +86,8 @@ enum SpeakerLabeler {
             } else {
                 speakerID = "s\(speakers.count + 1)"
                 idForTurnKey[key] = speakerID
-                speakers.append(Speaker(id: speakerID, name: "Speaker \(speakers.count + 1)"))
+                let displayName = namedSpeakers ? key : "Speaker \(speakers.count + 1)"
+                speakers.append(Speaker(id: speakerID, name: displayName))
             }
             let gap = groupWords.last.map { word.start - $0.end } ?? 0
             if speakerID != groupSpeakerID || gap > maxWordGap {

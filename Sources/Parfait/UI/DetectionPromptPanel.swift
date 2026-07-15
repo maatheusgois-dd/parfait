@@ -593,7 +593,7 @@ private struct RecordingPillPanelView: View {
                 .frame(width: 15, height: 19)
             Group {
                 if minimized {
-                    MeterBars(level: session.micLevel, delays: [0, 0.09, 0.18])
+                    MeterBars(levels: session.micBarLevels, barCount: 3)
                 } else {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .bold))
@@ -680,7 +680,7 @@ private struct RecordingExpandedCardView: View {
                     }
                     ForEach(LiveTranscriber.turns(from: session.liveSegments)) { turn in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(LiveTranscriber.name(for: turn.speakerID))
+                            Text(liveSpeakerName(for: turn.speakerID))
                                 .font(.parfait(10, .bold))
                                 .foregroundStyle(turn.speakerID == LiveTranscriber.youSpeakerID
                                                  ? Theme.blueberry : Theme.raspberry)
@@ -711,5 +711,13 @@ private struct RecordingExpandedCardView: View {
     private func timeString(_ t: TimeInterval) -> String {
         let s = Int(t)
         return String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    private func liveSpeakerName(for speakerID: String) -> String {
+        if speakerID == LiveTranscriber.othersSpeakerID,
+           let active = session.activeRemoteSpeaker {
+            return active
+        }
+        return LiveTranscriber.name(for: speakerID)
     }
 }

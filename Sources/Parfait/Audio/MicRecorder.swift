@@ -1,5 +1,4 @@
 import AVFoundation
-import Accelerate
 
 enum MicRecorderError: LocalizedError {
     case alreadyRecording
@@ -14,7 +13,7 @@ enum MicRecorderError: LocalizedError {
 }
 
 final class MicRecorder: @unchecked Sendable {
-    var levelHandler: (@Sendable (Float) -> Void)? {
+    var levelHandler: (@Sendable ([Float]) -> Void)? {
         get { lock.lock(); defer { lock.unlock() }; return _levelHandler }
         set { lock.lock(); defer { lock.unlock() }; _levelHandler = newValue }
     }
@@ -36,14 +35,14 @@ final class MicRecorder: @unchecked Sendable {
 
     private let lock = NSLock()
     private let restartQueue = DispatchQueue(label: "parfait.mic-recorder.restart")
-    private var _levelHandler: (@Sendable (Float) -> Void)?
+    private var _levelHandler: (@Sendable ([Float]) -> Void)?
     private var _bufferSink: (@Sendable (AVAudioPCMBuffer) -> Void)?
     private var engine: AVAudioEngine?
     private var file: AVAudioFile?
     private var converter: AVAudioConverter?
     private var configObserver: (any NSObjectProtocol)?
-    private var smoothedLevel: Float = 0
-    private var lastLevelEmit: CFAbsoluteTime = 0
+    private static let barCount = 12
+    private var smoothedLevels = [Float](repeating: 0, count: barCount)
 
     func start(writingTo url: URL) throws {
         lock.lock()
@@ -117,7 +116,7 @@ final class MicRecorder: @unchecked Sendable {
             }
             self.converter = converter
         }
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             self?.process(buffer)
         }
     }
@@ -149,14 +148,13 @@ final class MicRecorder: @unchecked Sendable {
         }
         converter = nil
         file = nil // releases the writer, finalizing the .m4a
-        smoothedLevel = 0
-        lastLevelEmit = 0
+        smoothedLevels = Array(repeating: 0, count: Self.barCount)
     }
 
     // MARK: - Tap callback
 
     private func process(_ buffer: AVAudioPCMBuffer) {
-        var emit: (@Sendable (Float) -> Void, Float)?
+        var emit: (@Sendable ([Float]) -> Void, [Float])?
         var sink: (@Sendable (AVAudioPCMBuffer) -> Void)?
         lock.lock()
         writeLocked(buffer)
@@ -199,21 +197,48 @@ final class MicRecorder: @unchecked Sendable {
         }
     }
 
-    private static let meterFloorDB: Float = -55   // near-silence -> level 0
-    private static let meterCeilingDB: Float = -12  // loud/near-clip speech -> level 1
+    private static let meterSilenceDB: Float = -55
 
-    private func meterLocked(_ buffer: AVAudioPCMBuffer) -> Float? {
+    private func meterLocked(_ buffer: AVAudioPCMBuffer) -> [Float]? {
         guard buffer.frameLength > 0, let samples = buffer.floatChannelData?[0] else { return nil }
-        var rms: Float = 0
-        vDSP_rmsqv(samples, 1, &rms, vDSP_Length(buffer.frameLength))
-        // dBFS mapped to a floor/ceiling window (rather than raw sqrt(rms)) so normal speech
-        // (~-35..-20 dBFS) actually fills the meter instead of only the loudest moments.
-        let dB = 20 * log10(max(rms, 1e-6))
-        let normalized = (dB - Self.meterFloorDB) / (Self.meterCeilingDB - Self.meterFloorDB)
-        smoothedLevel += (min(1, max(0, normalized)) - smoothedLevel) * 0.3
-        let now = CFAbsoluteTimeGetCurrent()
-        guard now - lastLevelEmit >= 0.1 else { return nil }
-        lastLevelEmit = now
-        return smoothedLevel
+        let frameCount = Int(buffer.frameLength)
+        let newLevels = Self.barLevels(from: samples, frameCount: frameCount, barCount: Self.barCount)
+        for index in 0..<Self.barCount {
+            let old = smoothedLevels[index]
+            let new = newLevels[index]
+            // Rise quickly, fall more slowly so speech feels lively.
+            let smoothing: Float = new > old ? 0.75 : 0.25
+            smoothedLevels[index] = old + ((new - old) * smoothing)
+        }
+        return smoothedLevels
+    }
+
+    /// RMS per buffer segment, mapped to 0...1 with a quiet-speech curve.
+    static func barLevels(
+        from samples: UnsafePointer<Float>,
+        frameCount: Int,
+        barCount: Int
+    ) -> [Float] {
+        guard frameCount > 0, barCount > 0 else {
+            return Array(repeating: 0, count: max(barCount, 0))
+        }
+
+        return (0..<barCount).map { index in
+            let start = index * frameCount / barCount
+            let proposedEnd = (index + 1) * frameCount / barCount
+            let end = min(frameCount, max(start + 1, proposedEnd))
+
+            var sumOfSquares: Float = 0
+            for frame in start..<end {
+                let sample = samples[frame]
+                sumOfSquares += sample * sample
+            }
+
+            let sampleCount = Float(end - start)
+            let rms = sqrt(sumOfSquares / sampleCount)
+            let decibels = 20 * log10(max(rms, 0.000_001))
+            let normalized = max(0, min(1, (decibels - meterSilenceDB) / -meterSilenceDB))
+            return powf(normalized, 0.7)
+        }
     }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import CoreServices
 import SwiftUI
 
 struct ParfaitApp: App {
@@ -124,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordingCard: RecordingCardController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        registerApplicationIconWithLaunchServices()
         Task { @MainActor in AppState.shared.bootstrap() }
         observeWindowsForMenuBar()
         // The floating "Record this meeting?" card on detection, and the live
@@ -132,6 +134,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             detectionPrompt = DetectionPromptController()
             recordingCard = RecordingCardController()
         }
+    }
+
+    /// Re-register the bundle so Notification Center picks up AppIcon.icns changes
+    /// after rebuilds (LSUIElement apps cache the old glyph aggressively).
+    private func registerApplicationIconWithLaunchServices() {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        LSRegisterURL(Bundle.main.bundleURL as CFURL, true)
     }
 
     /// .accessory apps (LSUIElement) have no Dock icon *and no menu bar at all* —

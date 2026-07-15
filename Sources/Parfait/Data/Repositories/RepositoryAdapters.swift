@@ -12,10 +12,20 @@ extension CalendarStore: CalendarRepository {
         return RelativeTimeFormatter.until(event.start, now: .now)
     }
 
-    func meetingForCalendarEvent(_ eventID: String, in meetings: [Meeting]) -> Meeting? {
+    func meetingForCalendarEvent(_ event: CalendarEventSummary, in meetings: [Meeting]) -> Meeting? {
         meetings
-            .filter { $0.calendarEventID == eventID }
-            .max(by: { $0.createdAt < $1.createdAt })
+            .filter { Self.matchesCalendarInstance($0, event: event) }
+            .max { a, b in
+                if a.duration != b.duration { return a.duration < b.duration }
+                return a.createdAt > b.createdAt
+            }
+    }
+
+    private static func matchesCalendarInstance(_ meeting: Meeting, event: CalendarEventSummary) -> Bool {
+        guard meeting.calendarEventID == event.id else { return false }
+        if let start = meeting.calendarEventStart { return start == event.start }
+        guard let end = meeting.calendarEventEnd else { return false }
+        return meeting.createdAt >= event.start.addingTimeInterval(-3600) && meeting.createdAt < end
     }
 }
 

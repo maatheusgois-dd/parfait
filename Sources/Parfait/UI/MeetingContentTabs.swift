@@ -51,7 +51,8 @@ struct NotesTab: View {
                 } else {
                     EmptyStateView(
                         title: "No notes yet",
-                        message: meeting.notice ?? "Press Regenerate once the transcript exists, or check Settings → Intelligence.",
+                        message: MeetingNotice.presentation(for: meeting.notice)?.message
+                            ?? "Press Regenerate once the transcript exists, or check Settings → Intelligence.",
                         actionTitle: continueActionTitle,
                         action: continueAction)
                 }

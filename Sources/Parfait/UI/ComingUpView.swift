@@ -222,8 +222,7 @@ struct ComingUpView: View {
             timelineEventActions(
                 event: event,
                 showJoin: showJoin,
-                folderRule: folderRule,
-                highlighted: highlighted
+                folderRule: folderRule
             )
         }
         .padding(.horizontal, 10)
@@ -240,8 +239,7 @@ struct ComingUpView: View {
     private func timelineEventActions(
         event: CalendarEventSummary,
         showJoin: Bool,
-        folderRule: MeetingFolder?,
-        highlighted: Bool
+        folderRule: MeetingFolder?
     ) -> some View {
         HStack(alignment: .center, spacing: 10) {
             FolderPickerMenu(
@@ -249,7 +247,7 @@ struct ComingUpView: View {
                 calendarTitle: event.title,
                 meetingID: nil
             ) {
-                folderPickerChipLabel(folder: folderRule, highlighted: highlighted)
+                folderPickerChipLabel(folder: folderRule)
             }
             .buttonStyle(.plain)
 
@@ -261,34 +259,8 @@ struct ComingUpView: View {
     }
 
     @ViewBuilder
-    private func folderPickerChipLabel(folder: MeetingFolder?, highlighted: Bool) -> some View {
-        if highlighted {
-            HStack(spacing: 6) {
-                if let folder {
-                    FolderIconView(folder: folder, size: 14)
-                    Text(folder.name)
-                        .font(.parfait(11, .medium))
-                        .foregroundStyle(Theme.heading(scheme))
-                        .lineLimit(1)
-                } else {
-                    Image(systemName: "folder.badge.plus")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(Theme.secondary(scheme))
-                        .frame(width: 14, height: 14)
-                    Text("Add to folder")
-                        .font(.parfait(11, .medium))
-                        .foregroundStyle(Theme.heading(scheme))
-                        .lineLimit(1)
-                }
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(Theme.tertiary(scheme))
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Theme.card(scheme), in: Capsule())
-            .contentShape(Capsule())
-        } else if let folder {
+    private func folderPickerChipLabel(folder: MeetingFolder?) -> some View {
+        if let folder {
             FolderIconView(folder: folder, size: 20)
                 .contentShape(Rectangle())
         } else {

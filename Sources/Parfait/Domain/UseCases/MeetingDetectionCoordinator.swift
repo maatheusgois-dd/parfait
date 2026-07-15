@@ -35,12 +35,14 @@ final class MeetingDetectionCoordinator {
     }
 
     func start() {
+        ParfaitConsoleLog.detection("coordinator starting")
         detectionService.start { [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }
     }
 
     func stop() {
+        ParfaitConsoleLog.detection("coordinator stopping")
         detectionService.stop()
         pendingDetection = nil
         pendingDetections.removeAll()
@@ -54,11 +56,13 @@ final class MeetingDetectionCoordinator {
 
     func acceptDetection() async {
         let name = pendingDetection.map(MeetingDetectionServiceImpl.displayName)
+        ParfaitConsoleLog.detection("user accepted prompt for \(name ?? "?")")
         _ = await startRecording.execute(sourceApp: name, calendarEvent: nil)
         clearPendingDetection()
     }
 
     func dismissDetection() {
+        ParfaitConsoleLog.detection("user dismissed prompt")
         clearPendingDetection()
     }
 
@@ -77,6 +81,7 @@ final class MeetingDetectionCoordinator {
         let name = MeetingDetectionServiceImpl.displayName(for: event)
 
         if event.isRunningInput {
+            ParfaitConsoleLog.detection("mic on — \(name) pid=\(event.pid) bundle=\(event.bundleID ?? "?")")
             activeMicApps[event.pid] = name
             onActiveMicAppsChanged?(activeMicApps)
             pendingAutoStop?.cancel()
@@ -86,6 +91,7 @@ final class MeetingDetectionCoordinator {
             guard !isStartingRecording() else { return }
 
             if settings.autoRecord {
+                ParfaitConsoleLog.detection("auto-record for \(name)")
                 Task { await startRecording.execute(sourceApp: name, calendarEvent: nil) }
             } else {
                 let now = ContinuousClock.now
@@ -95,9 +101,13 @@ final class MeetingDetectionCoordinator {
                 pendingDetections[event.pid] = event
                 onDetectedAppNameChanged?(name)
                 pendingDetection = event
-                if !recentlyAnnounced { onDetectionChime?() }
+                if !recentlyAnnounced {
+                    ParfaitConsoleLog.detection("showing prompt for \(name)")
+                    onDetectionChime?()
+                }
             }
         } else {
+            ParfaitConsoleLog.detection("mic off — \(name) pid=\(event.pid)")
             activeMicApps.removeValue(forKey: event.pid)
             onActiveMicAppsChanged?(activeMicApps)
             pendingDetections.removeValue(forKey: event.pid)
@@ -111,6 +121,7 @@ final class MeetingDetectionCoordinator {
                 }
             }
             guard isRecording(), settings.autoStopRecording, activeMicApps.isEmpty else { return }
+            ParfaitConsoleLog.detection("scheduling auto-stop in 8s")
             pendingAutoStop = Task { [weak self] in
                 try? await Task.sleep(for: Self.autoStopGrace)
                 guard !Task.isCancelled else { return }
@@ -121,6 +132,7 @@ final class MeetingDetectionCoordinator {
 
     private func autoStop() async {
         guard isRecording(), settings.autoStopRecording, activeMicApps.isEmpty else { return }
+        ParfaitConsoleLog.detection("auto-stop firing")
         _ = await stopRecording.execute()
     }
 }

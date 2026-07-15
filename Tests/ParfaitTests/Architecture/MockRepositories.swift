@@ -74,10 +74,13 @@ final class MockCalendarRepository: CalendarRepository {
 
     func countdownText(for event: CalendarEventSummary) -> String? { "in 5m" }
 
-    func meetingForCalendarEvent(_ eventID: String, in meetings: [Meeting]) -> Meeting? {
+    func meetingForCalendarEvent(_ event: CalendarEventSummary, in meetings: [Meeting]) -> Meeting? {
         meetings
-            .filter { $0.calendarEventID == eventID }
-            .max(by: { $0.createdAt < $1.createdAt })
+            .filter { $0.calendarEventID == event.id && $0.calendarEventStart == event.start }
+            .max { a, b in
+                if a.duration != b.duration { return a.duration < b.duration }
+                return a.createdAt > b.createdAt
+            }
     }
 }
 
@@ -161,6 +164,7 @@ final class MockRecordingService: RecordingService {
     var stopPair: (RecordingSession, Meeting)?
     var discardPair: (RecordingSession, Meeting)?
     private(set) var startCallCount = 0
+    private(set) var continueCallCount = 0
     private(set) var stopCallCount = 0
     private(set) var discardCallCount = 0
 
@@ -184,6 +188,7 @@ final class MockRecordingService: RecordingService {
         meetingID: UUID,
         meetingRepository: MeetingRepository
     ) async -> Result<RecordingSessionHandle, RecordingError> {
+        continueCallCount += 1
         guard let continueResult else { return .failure(.cannotContinue) }
         if case .success(let handle) = continueResult {
             adopt(handle)

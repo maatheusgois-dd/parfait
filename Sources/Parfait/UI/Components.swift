@@ -100,67 +100,51 @@ struct RecordDot: View {
 }
 
 struct LevelMeter: View {
-    /// 0...1 — scales bob amplitude; bars always animate like the marketing site.
-    var level: Float
+    var levels: [Float]
 
     var body: some View {
-        MeterBars(level: level, delays: Self.delays)
+        MeterBars(levels: levels)
     }
-
-    private static let delays: [TimeInterval] = [
-        0, 0.09, 0.18, 0.27, 0.36, 0.45, 0.30, 0.15, 0.05, 0.22, 0.12, 0.34,
-    ]
 }
 
-/// Staggered bottom-anchored bars — mirrors `.meter` / `@keyframes bob` on the site.
+/// Bottom-anchored capsules driven by per-segment RMS from the mic tap.
 struct MeterBars: View {
-    var level: Float
-    var delays: [TimeInterval]
+    var levels: [Float]
+    /// When set, downsamples the full level array (e.g. 12 → 3 for the pill).
+    var barCount: Int?
 
-    private let minScale: CGFloat = 0.35
-    private let maxScale: CGFloat = 2.4
-    private let baseHeight: CGFloat = 5
+    private let minimumHeight: CGFloat = 4
+    private let maximumHeight: CGFloat = 14
     private let containerHeight: CGFloat = 16
 
     var body: some View {
+        let displayLevels = displayedLevels()
         HStack(alignment: .bottom, spacing: 3) {
-            ForEach(Array(delays.enumerated()), id: \.offset) { _, delay in
-                BobbingMeterBar(
-                    delay: delay,
-                    level: level,
-                    minScale: minScale,
-                    maxScale: maxScale,
-                    baseHeight: baseHeight)
+            ForEach(displayLevels.indices, id: \.self) { index in
+                Capsule()
+                    .fill(Theme.mint)
+                    .frame(
+                        width: 4,
+                        height: barHeight(for: displayLevels[index])
+                    )
             }
         }
         .frame(height: containerHeight, alignment: .bottom)
-    }
-}
-
-private struct BobbingMeterBar: View {
-    let delay: TimeInterval
-    var level: Float
-    let minScale: CGFloat
-    let maxScale: CGFloat
-    let baseHeight: CGFloat
-
-    @State private var bobbing = false
-
-    private var peakScale: CGFloat {
-        minScale + CGFloat(min(max(level, 0.1), 1)) * (maxScale - minScale)
+        .animation(.easeOut(duration: 0.08), value: displayLevels)
     }
 
-    var body: some View {
-        RoundedRectangle(cornerRadius: 2)
-            .fill(Theme.mint)
-            .frame(width: 4, height: baseHeight)
-            .scaleEffect(y: bobbing ? peakScale : minScale, anchor: .bottom)
-            .animation(.linear(duration: 0.1), value: level)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true).delay(delay)) {
-                    bobbing = true
-                }
-            }
+    private func displayedLevels() -> [Float] {
+        guard let barCount, barCount < levels.count else { return levels }
+        return (0..<barCount).map { index in
+            let start = index * levels.count / barCount
+            let end = (index + 1) * levels.count / barCount
+            return levels[start..<end].max() ?? 0
+        }
+    }
+
+    private func barHeight(for level: Float) -> CGFloat {
+        let clamped = CGFloat(min(max(level, 0), 1))
+        return minimumHeight + ((maximumHeight - minimumHeight) * clamped)
     }
 }
 
@@ -331,6 +315,67 @@ struct CardBackground: ViewModifier {
         content
             .padding(14)
             .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.cornerRadius))
+    }
+}
+
+struct MeetingNoticeBanner: View {
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.parfaitActionColor) private var actionColor
+
+    let presentation: MeetingNotice.Presentation
+    var primaryActionTitle: String?
+    var primaryActionIcon: String?
+    var primaryAction: (() -> Void)?
+
+    private var accent: Color {
+        presentation.isEmptyTranscript ? Theme.honey(scheme) : Theme.blueberry(scheme)
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(accent.opacity(scheme == .dark ? 0.16 : 0.12))
+                    .frame(width: 38, height: 38)
+                Image(systemName: presentation.systemImage)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(accent)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(presentation.title)
+                    .font(.parfait(13, .semibold))
+                    .foregroundStyle(Theme.heading(scheme))
+                Text(presentation.message)
+                    .font(.parfait(12))
+                    .foregroundStyle(Theme.secondary(scheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            if let primaryActionTitle, let primaryAction {
+                Button(action: primaryAction) {
+                    if let primaryActionIcon {
+                        Label(primaryActionTitle, systemImage: primaryActionIcon)
+                            .font(.parfait(12, .semibold))
+                    } else {
+                        Text(primaryActionTitle)
+                            .font(.parfait(12, .semibold))
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(primaryActionIcon == "mic.fill" ? Theme.mint(scheme) : actionColor)
+                .controlSize(.regular)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.cornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.cornerRadius)
+                .strokeBorder(accent.opacity(0.22), lineWidth: 1)
+        }
     }
 }
 

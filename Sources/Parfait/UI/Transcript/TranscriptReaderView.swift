@@ -29,7 +29,8 @@ struct TranscriptReaderView: View {
                     title: "No transcript",
                     message: meeting.state == .processing
                         ? "Transcription is still running."
-                        : (meeting.notice ?? "Nothing was transcribed for this meeting."),
+                        : (MeetingNotice.presentation(for: meeting.notice)?.message
+                            ?? "Nothing was transcribed for this meeting."),
                     actionTitle: continueActionTitle,
                     action: continueAction)
             } else {

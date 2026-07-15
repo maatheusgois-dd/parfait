@@ -27,6 +27,7 @@ enum SettingsKey {
     static let showLiveRecordingCard = "showLiveRecordingCard" // floating live transcript widget
     static let openMainWindowAtLaunch = "openMainWindowAtLaunch" // show main window on launch (vs. menu bar only)
     static let sideNotesPanelWidth = "sideNotesPanelWidth"
+    static let developerMode = "developerMode"                 // show Debug settings tab
 }
 
 enum AppearanceMode: String, CaseIterable, Identifiable, Hashable {
@@ -121,6 +122,7 @@ enum AppSettings {
             SettingsKey.showLiveRecordingCard: true,
             SettingsKey.openMainWindowAtLaunch: true,
             SettingsKey.sideNotesPanelWidth: 280.0,
+            SettingsKey.developerMode: false,
         ])
     }
 
@@ -190,5 +192,8 @@ enum AppSettings {
     }
     static var openMainWindowAtLaunch: Bool {
         defaults.bool(forKey: SettingsKey.openMainWindowAtLaunch)
+    }
+    static var developerMode: Bool {
+        defaults.bool(forKey: SettingsKey.developerMode)
     }
 }

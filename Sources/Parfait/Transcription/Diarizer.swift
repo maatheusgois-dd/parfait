@@ -3,6 +3,7 @@ import Foundation
 
 enum Diarizer {
     static func diarize(fileURL: URL, maxSpeakers: Int? = nil) async throws -> [DiarizedTurn] {
+        ParfaitConsoleLog.diarizer("start \(fileURL.lastPathComponent) maxSpeakers=\(maxSpeakers.map(String.init) ?? "auto")")
         // OfflineDiarizerManager is non-Sendable: create + use within this scope only.
         // Capping to the known remote-attendee count keeps VBx from fragmenting one
         // speaker into several across a noisy call (the system channel never carries
@@ -15,7 +16,7 @@ enum Diarizer {
         // First run downloads ~22 MB of Core ML models from HuggingFace; cached after.
         try await manager.prepareModels()
         let result = try await manager.process(fileURL)
-        return result.segments
+        let turns = result.segments
             .map {
                 DiarizedTurn(
                     speaker: $0.speakerId,
@@ -24,5 +25,7 @@ enum Diarizer {
                 )
             }
             .sorted { $0.start < $1.start }
+        ParfaitConsoleLog.diarizer("done — \(turns.count) turns, \(Set(turns.map(\.speaker)).count) speakers")
+        return turns
     }
 }

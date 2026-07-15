@@ -278,7 +278,7 @@ private struct RecordingCard: View {
                     .foregroundStyle(actionColor)
             }
             HStack(alignment: .bottom) {
-                LevelMeter(level: session.micLevel)
+                LevelMeter(levels: session.micBarLevels)
                 Spacer()
                 if !session.systemStarted {
                     Text("mic only")

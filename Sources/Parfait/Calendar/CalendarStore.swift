@@ -38,6 +38,7 @@ final class CalendarStore: ObservableObject {
         horizonDays: Int? = nil
     ) async {
         guard AppSettings.useCalendar, CalendarAuthorization.isAuthorized else {
+            ParfaitConsoleLog.calendar("refresh skipped — disabled or unauthorized")
             agenda = []
             fetchHorizonDays = Self.defaultFetchHorizonDays
             lastRefresh = now
@@ -68,6 +69,8 @@ final class CalendarStore: ObservableObject {
             horizonDays: targetHorizon)
         fetchHorizonDays = targetHorizon
         lastRefresh = now
+        let eventCount = agenda.reduce(0) { $0 + $1.events.count }
+        ParfaitConsoleLog.calendar("refreshed \(eventCount) events across \(agenda.count) days (horizon=\(targetHorizon)d)")
     }
 
     func currentEvent(at now: Date = .now, sourceApp: String? = nil) async -> CalendarEventSummary? {
@@ -82,7 +85,9 @@ final class CalendarStore: ObservableObject {
             let events = eventStore.events(matching: predicate)
             guard let selected = CalendarEventSelector.select(from: events, at: now, sourceApp: sourceApp)
             else { return nil }
-            return CalendarAgendaBuilder.map(selected)
+            guard let mapped = CalendarAgendaBuilder.map(selected) else { return nil }
+            ParfaitConsoleLog.calendar("current event → \"\(mapped.title)\" source=\(sourceApp ?? "none")")
+            return mapped
         }.value
     }
 

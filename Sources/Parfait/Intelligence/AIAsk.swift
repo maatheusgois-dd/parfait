@@ -53,6 +53,7 @@ enum AIAsk {
     }
 
     static func answer(prompt: String, onDelta: (@Sendable (String) -> Void)? = nil) async throws -> String {
+        ParfaitConsoleLog.ask("answer via \(provider.displayName) mode=\(deliveryMode.displayName) prompt=\(prompt.count) chars")
         let systemPrompt =
             "You are Parfait. Meeting data is appended below — answer immediately from it. "
             + "Never say you will look up, fetch, or call tools. Be concise."
@@ -87,13 +88,14 @@ enum AIAsk {
 
     @discardableResult
     static func openMeeting(id: UUID, title: String, question: String) -> Bool {
+        ParfaitConsoleLog.ask("openMeeting \"\(title)\" via \(provider.displayName)")
         switch provider {
-        case .apple: false
+        case .apple: return false
         case .claude:
-            ClaudeDesktop.openNewChat(
+            return ClaudeDesktop.openNewChat(
                 prompt: ClaudeDesktopPrompt.meeting(id: id, title: title, question: question))
         case .codex:
-            CodexApp.openNewThread(prompt: CodexPrompt.meeting(id: id, title: title, question: question))
+            return CodexApp.openNewThread(prompt: CodexPrompt.meeting(id: id, title: title, question: question))
         }
     }
 

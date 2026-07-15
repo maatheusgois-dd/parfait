@@ -44,8 +44,10 @@ final class UseCaseTests: XCTestCase {
 
     func testOpenCalendarEventReturnsExistingMeeting() async {
         let meetings = MockMeetingRepository()
+        let event = ArchitectureFixtures.sampleCalendarEvent()
         var existing = Meeting(title: "Prior", createdAt: Date())
-        existing.calendarEventID = "evt-1"
+        existing.calendarEventID = event.id
+        existing.calendarEventStart = event.start
         try? meetings.archive.createFolder(for: existing.id)
         meetings.upsert(existing)
 
@@ -59,7 +61,7 @@ final class UseCaseTests: XCTestCase {
             calendarRepository: calendar,
             prepareMeeting: prepare)
 
-        let outcome = await useCase.execute(ArchitectureFixtures.sampleCalendarEvent())
+        let outcome = await useCase.execute(event)
         XCTAssertEqual(outcome, .openExisting(existing.id))
     }
 

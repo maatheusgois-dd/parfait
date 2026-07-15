@@ -21,34 +21,17 @@ enum TranscriberError: LocalizedError {
 }
 
 enum Transcriber {
-    static func modelInstalled(locale: Locale) async -> Bool {
-        guard SpeechTranscriber.isAvailable,
-              let resolved = await SpeechTranscriber.supportedLocale(equivalentTo: locale)
-        else { return false }
-        // Locale matching is BCP-47 based; direct == misses equivalents.
-        let installed = await SpeechTranscriber.installedLocales
-        return installed.contains { $0.identifier(.bcp47) == resolved.identifier(.bcp47) }
+    static func modelInstalled() async -> Bool {
+        await TranscriptionLocales.modelsInstalled()
     }
 
-    static func ensureModel(locale: Locale, progress: (@Sendable (Double) -> Void)?) async throws {
-        let transcriber = try await makeTranscriber(locale: locale)
-        guard let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) else {
-            progress?(1)
-            return
-        }
-        var observation: NSKeyValueObservation?
-        if let progress {
-            observation = request.progress.observe(\.fractionCompleted, options: [.initial, .new]) { p, _ in
-                progress(p.fractionCompleted)
-            }
-        }
-        defer { observation?.invalidate() }
-        try await request.downloadAndInstall()
-        progress?(1)
+    static func ensureModel(progress: (@Sendable (Double) -> Void)?) async throws {
+        try await TranscriptionLocales.ensureModels(progress: progress)
     }
 
-    static func transcribeFile(at url: URL, locale: Locale) async throws -> TranscriptionOutput {
-        let transcriber = try await makeTranscriber(locale: locale)
+    static func transcribeFile(at url: URL) async throws -> TranscriptionOutput {
+        ParfaitConsoleLog.transcribe("file \(url.lastPathComponent)")
+        let transcriber = try await makeTranscriber()
 
         // Results must be consumed concurrently: the stream only terminates when the
         // session finishes, so awaiting it before feeding audio would deadlock.
@@ -65,13 +48,14 @@ enum Transcriber {
         try await analyzer.finalizeAndFinish(through: lastSampleTime)
 
         let (segments, words) = try await collected
+        ParfaitConsoleLog.transcribe("\(url.lastPathComponent) → \(segments.count) segments, \(words.count) words")
         return TranscriptionOutput(words: words.isEmpty ? segments : words, segments: segments)
     }
 
-    private static func makeTranscriber(locale: Locale) async throws -> SpeechTranscriber {
+    private static func makeTranscriber() async throws -> SpeechTranscriber {
         guard SpeechTranscriber.isAvailable else { throw TranscriberError.modelUnavailable }
-        guard let resolved = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
-            throw TranscriberError.unsupportedLocale(locale.identifier)
+        guard let resolved = await TranscriptionLocales.primary() else {
+            throw TranscriberError.unsupportedLocale(Locale.current.identifier)
         }
         // Batch mode: no .volatileResults, so every result arrives final exactly once.
         return SpeechTranscriber(

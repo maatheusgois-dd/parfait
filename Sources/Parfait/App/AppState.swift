@@ -284,8 +284,9 @@ final class AppState: NSObject, ObservableObject {
         await container.retryMeeting.execute(meetingID: meetingID)
     }
 
-    func regenerateSummary(meetingID: UUID, templateName: String? = nil) async {
-        await container.regenerateSummary.execute(meetingID: meetingID, templateName: templateName)
+    func regenerateSummary(meetingID: UUID, templateName: String? = nil, forceProvider: AIProvider? = nil) async {
+        await container.regenerateSummary.execute(
+            meetingID: meetingID, templateName: templateName, forceProvider: forceProvider)
     }
 
     private func applySummaryUpdate(_ update: ProcessingPipeline.SummaryUpdate, for id: UUID) {

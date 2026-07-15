@@ -41,7 +41,7 @@ enum SpeakerLabeler {
         let deduped = dropEchoedMic(merged)
         let present = Set(deduped.map(\.speakerID))
         let speakersOut = speakers.filter { present.contains($0.id) }
-        let mode = namedSpeakers ? "Zoom names"
+        let mode = namedSpeakers ? "hybrid/Zoom names"
             : (systemTurns != nil ? "diarized" : "flat")
         ParfaitConsoleLog.pipeline(
             "labeled \(deduped.count) segments, \(speakersOut.count) speakers (\(mode)): \(speakersOut.map(\.name).joined(separator: ", "))")
@@ -86,7 +86,7 @@ enum SpeakerLabeler {
             } else {
                 speakerID = "s\(speakers.count + 1)"
                 idForTurnKey[key] = speakerID
-                let displayName = namedSpeakers ? key : "Speaker \(speakers.count + 1)"
+                let displayName = displayName(for: key, namedSpeakers: namedSpeakers, index: speakers.count + 1)
                 speakers.append(Speaker(id: speakerID, name: displayName))
             }
             let gap = groupWords.last.map { word.start - $0.end } ?? 0
@@ -126,6 +126,16 @@ enum SpeakerLabeler {
     }
 
     // MARK: - Cleanup
+
+    private static func displayName(
+        for key: String, namedSpeakers: Bool, index: Int
+    ) -> String {
+        guard namedSpeakers else { return "Speaker \(index)" }
+        if key.hasPrefix("S"), key.dropFirst().allSatisfy(\.isNumber) {
+            return "Speaker \(key.dropFirst())"
+        }
+        return key
+    }
 
     /// FluidAudio can fragment one remote voice into several clusters (worst on
     /// uncapped, no-calendar calls). Fold any speaker holding only a sliver of the

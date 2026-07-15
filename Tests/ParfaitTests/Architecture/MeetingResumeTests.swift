@@ -86,6 +86,7 @@ private final class DelayedMockProcessingService: ProcessingService, @unchecked 
         meeting: Meeting,
         transcript: String,
         userNotes: String,
+        forceProvider: AIProvider? = nil,
         onDelta: (@Sendable (String) -> Void)?
     ) async -> ProcessingPipeline.SummaryOutcome {
         .success("", provider: "apple")

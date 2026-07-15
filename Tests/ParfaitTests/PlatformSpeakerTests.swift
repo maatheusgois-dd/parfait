@@ -106,4 +106,22 @@ final class PlatformSpeakerTests: XCTestCase {
 
         XCTAssertEqual(speakers.map(\.name), ["Jimmy Veloso", "Gui Lima"])
     }
+
+    func testParseZoomCaptionLine() {
+        XCTAssertEqual(
+            ZoomActiveSpeakerReader.parseZoomCaptionLine("Gui Lima: hello everyone")?.name,
+            "Gui Lima")
+        XCTAssertEqual(
+            ZoomActiveSpeakerReader.parseZoomCaptionLine("Paulo said: let's ship it")?.name,
+            "Paulo")
+        XCTAssertNil(ZoomActiveSpeakerReader.parseZoomCaptionLine("Mute"))
+    }
+
+    func testParseParticipantRow() {
+        XCTAssertEqual(ZoomActiveSpeakerReader.parseParticipantRow("Victor Moura"), "Victor Moura")
+        XCTAssertNil(ZoomActiveSpeakerReader.parseParticipantRow("Participants (5)"))
+        XCTAssertNil(
+            ZoomActiveSpeakerReader.parseParticipantRow(
+                "Gui Lima, Computer audio unmuted, Video on"))
+    }
 }

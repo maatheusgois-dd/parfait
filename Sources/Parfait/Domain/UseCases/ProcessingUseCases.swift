@@ -132,9 +132,11 @@ final class RegenerateSummaryUseCase {
         self.processingService = processingService
     }
 
-    func execute(meetingID: UUID, templateName: String? = nil) async {
+    func execute(meetingID: UUID, templateName: String? = nil, forceProvider: AIProvider? = nil) async {
         guard var entry = meetingRepository.meeting(id: meetingID) else { return }
-        ParfaitConsoleLog.processing("regenerate \(meetingID.uuidString.prefix(8)) template=\(templateName ?? entry.templateName ?? "default")")
+        ParfaitConsoleLog.processing(
+            "regenerate \(meetingID.uuidString.prefix(8)) template=\(templateName ?? entry.templateName ?? "default")"
+                + (forceProvider.map { " provider=\($0.displayName)" } ?? ""))
         if let templateName {
             entry.templateName = templateName
             meetingRepository.upsert(entry)
@@ -149,7 +151,7 @@ final class RegenerateSummaryUseCase {
         let titleAtEntry = entry.title
 
         let outcome = await processingService.summarize(
-            meeting: entry, transcript: text, userNotes: userNotes
+            meeting: entry, transcript: text, userNotes: userNotes, forceProvider: forceProvider
         ) { [meetingID] delta in
             Task { @MainActor in self.onStreamingSummary?(meetingID, delta) }
         }

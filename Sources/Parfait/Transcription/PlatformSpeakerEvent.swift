@@ -1,5 +1,16 @@
 import Foundation
 
+/// How a platform speaker event was observed. Higher-confidence sources win when
+/// correlating diarization clusters with Zoom display names.
+enum PlatformSpeakerSource: String, Codable, Sendable {
+    /// Zoom video tile marked ", active speaker".
+    case activeSpeaker
+    /// Zoom live-transcript / closed-caption line with a speaker prefix.
+    case caption
+    /// Participant tile with AXSelected set (fallback when no active-speaker tile).
+    case selectedTile
+}
+
 /// A stretch of time when a conferencing app reported someone as the active speaker.
 /// Collected during recording (Zoom today) and correlated with the system-audio
 /// transcript after Stop.
@@ -8,6 +19,7 @@ struct PlatformSpeakerEvent: Codable, Equatable, Sendable {
     var name: String
     var start: TimeInterval
     var end: TimeInterval
+    var source: PlatformSpeakerSource = .activeSpeaker
 }
 
 enum PlatformSpeakerTurnBuilder {

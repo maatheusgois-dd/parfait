@@ -44,6 +44,14 @@ final class HTMLExporterTests: XCTestCase {
         XCTAssertTrue(html.contains("<p>&gt; not a supported quote</p>"))
     }
 
+    func testHorizontalRule() {
+        let html = HTMLExporter.renderMarkdown("Before\n\n---\n\nAfter")
+        XCTAssertTrue(html.contains("<hr>"))
+        XCTAssertFalse(html.contains("---"))
+        XCTAssertTrue(html.contains("<p>Before</p>"))
+        XCTAssertTrue(html.contains("<p>After</p>"))
+    }
+
     // MARK: - escape
 
     func testEscapeNeutralizesScriptTag() {

@@ -18,12 +18,14 @@ struct ProcessingServiceImpl: ProcessingService {
         meeting: Meeting,
         transcript: String,
         userNotes: String,
+        forceProvider: AIProvider? = nil,
         onDelta: (@Sendable (String) -> Void)?
     ) async -> ProcessingPipeline.SummaryOutcome {
         await ProcessingPipeline.summarize(
             meeting: meeting,
             transcript: transcript,
             userNotes: userNotes,
+            forceProvider: forceProvider,
             onDelta: onDelta)
     }
 

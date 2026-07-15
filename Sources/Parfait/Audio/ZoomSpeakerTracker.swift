@@ -13,12 +13,14 @@ final class ZoomSpeakerTracker: @unchecked Sendable {
     private let queue = DispatchQueue(label: "io.github.conrad-vanl.Parfait.zoom-speakers")
     private var timer: DispatchSourceTimer?
     private var events: [PlatformSpeakerEvent] = []
-    private var open: (name: String, start: TimeInterval)?
+    private var open: (name: String, start: TimeInterval, source: PlatformSpeakerSource)?
     private var lastPersist = Date.distantPast
     private var lastReportedName: String?
     private var tickCount = 0
     private var emptyTickStreak = 0
     private var lastSummary = Date.distantPast
+    private var lastCaptionKey: String?
+    private var lastRoster: [String] = []
 
     /// Called on the main queue whenever the active remote speaker changes.
     var onActiveSpeaker: (@MainActor (String?) -> Void)?
@@ -86,6 +88,8 @@ final class ZoomSpeakerTracker: @unchecked Sendable {
         let names = scan.active
         let t = now
 
+        recordCaption(scan.latestCaption, at: t)
+
         if names.isEmpty {
             emptyTickStreak += 1
             closeOpen(until: t)
@@ -93,17 +97,24 @@ final class ZoomSpeakerTracker: @unchecked Sendable {
         } else {
             emptyTickStreak = 0
             let primary = names[0]
+            let source = scan.activeSource
             reportActive(primary)
             if let open, open.name != primary {
-                events.append(PlatformSpeakerEvent(name: open.name, start: open.start, end: t))
+                events.append(PlatformSpeakerEvent(
+                    name: open.name, start: open.start, end: t, source: open.source))
                 ParfaitConsoleLog.zoom(
                     "segment closed \(open.name) \(String(format: "%.1f", open.start))-\(String(format: "%.1f", t))s → now \(primary)")
-                self.open = (primary, t)
+                self.open = (primary, t, source)
             } else if open == nil {
-                open = (primary, t)
-                ParfaitConsoleLog.zoom("segment opened \(primary) @ \(String(format: "%.1f", t))s")
+                open = (primary, t, source)
+                ParfaitConsoleLog.zoom("segment opened \(primary) @ \(String(format: "%.1f", t))s (\(source.rawValue))")
             }
             persist(force: false)
+        }
+
+        if scan.roster != lastRoster {
+            lastRoster = scan.roster
+            archive.saveZoomRoster(scan.roster, for: meetingID)
         }
 
         let now = Date()
@@ -137,9 +148,23 @@ final class ZoomSpeakerTracker: @unchecked Sendable {
     private func closeOpen(until end: TimeInterval) {
         guard let open else { return }
         if end > open.start {
-            events.append(PlatformSpeakerEvent(name: open.name, start: open.start, end: end))
+            events.append(PlatformSpeakerEvent(
+                name: open.name, start: open.start, end: end, source: open.source))
         }
         self.open = nil
+    }
+
+    /// Captures a short caption window when Zoom live transcript exposes speaker-prefixed lines.
+    private func recordCaption(_ caption: ZoomActiveSpeakerReader.CaptionLine?, at t: TimeInterval) {
+        guard let caption else { return }
+        let key = "\(caption.name)|\(caption.text)"
+        guard key != lastCaptionKey else { return }
+        lastCaptionKey = key
+        let start = max(0, t - 1.5)
+        events.append(PlatformSpeakerEvent(
+            name: caption.name, start: start, end: t, source: .caption))
+        ParfaitConsoleLog.zoom("caption \(caption.name): \(caption.text.prefix(60))")
+        persist(force: false)
     }
 
     private var now: TimeInterval {
@@ -161,10 +186,17 @@ final class ZoomSpeakerTracker: @unchecked Sendable {
 // MARK: - Zoom AX reader
 
 enum ZoomActiveSpeakerReader {
+    struct CaptionLine: Sendable, Equatable {
+        var name: String
+        var text: String
+    }
+
     struct ScanResult: Sendable {
         var zoomPID: pid_t?
         var roster: [String]
         var active: [String]
+        var activeSource: PlatformSpeakerSource
+        var latestCaption: CaptionLine?
     }
 
     private static let mainBundleID = "us.zoom.xos"
@@ -181,29 +213,49 @@ enum ZoomActiveSpeakerReader {
 
     static func scan() -> ScanResult {
         guard AccessibilityPermission.isTrusted else {
-            return ScanResult(zoomPID: nil, roster: [], active: [])
+            return ScanResult(
+                zoomPID: nil, roster: [], active: [], activeSource: .activeSpeaker,
+                latestCaption: nil)
         }
         guard let app = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleIdentifier == mainBundleID
         }) else {
-            return ScanResult(zoomPID: nil, roster: [], active: [])
+            return ScanResult(
+                zoomPID: nil, roster: [], active: [], activeSource: .activeSpeaker,
+                latestCaption: nil)
         }
 
         let root = AXUIElementCreateApplication(app.processIdentifier)
         var roster: [String] = []
         var activeTiles: [String] = []
         var activeLabels: [String] = []
-        walk(root, depth: 0, roster: &roster, activeTiles: &activeTiles, activeLabels: &activeLabels)
+        var selectedTiles: [String] = []
+        var latestCaption: CaptionLine?
+        walk(
+            root, depth: 0, roster: &roster, activeTiles: &activeTiles,
+            activeLabels: &activeLabels, selectedTiles: &selectedTiles,
+            latestCaption: &latestCaption)
         let rosterOut = deduped(roster)
         // Gallery tiles list every unmuted participant; only trust explicit
         // "active speaker" markers on those tiles. Legacy labels (participants
         // panel, notifications) are a fallback when no tile is marked.
-        let activeOut = deduped(activeTiles.isEmpty ? activeLabels : activeTiles)
-            .filter { !isLocalParticipant($0) }
+        let (activeOut, source): ([String], PlatformSpeakerSource)
+        if !activeTiles.isEmpty {
+            activeOut = activeTiles
+            source = .activeSpeaker
+        } else if !activeLabels.isEmpty {
+            activeOut = activeLabels
+            source = .activeSpeaker
+        } else {
+            activeOut = selectedTiles
+            source = .selectedTile
+        }
         return ScanResult(
             zoomPID: app.processIdentifier,
             roster: rosterOut,
-            active: activeOut)
+            active: deduped(activeOut).filter { !isLocalParticipant($0) },
+            activeSource: source,
+            latestCaption: latestCaption)
     }
 
     /// True when Zoom's display name matches the Mac account holder (local mic).
@@ -228,7 +280,9 @@ enum ZoomActiveSpeakerReader {
         depth: Int,
         roster: inout [String],
         activeTiles: inout [String],
-        activeLabels: inout [String]
+        activeLabels: inout [String],
+        selectedTiles: inout [String],
+        latestCaption: inout CaptionLine?
     ) {
         guard depth < 20 else { return }
 
@@ -237,9 +291,21 @@ enum ZoomActiveSpeakerReader {
             if let desc = attribute(element, kAXDescriptionAttribute as CFString) {
                 if let name = parseZoomParticipantDescription(desc) {
                     roster.append(name)
+                    if isSelected(element) {
+                        selectedTiles.append(name)
+                    }
                 }
                 if let name = parseZoomTileDescription(desc) {
                     activeTiles.append(name)
+                }
+            }
+        }
+
+        if r == "AXRow" || r == "AXOutlineRow" || r == "AXCell" {
+            for key in [kAXTitleAttribute as CFString, kAXDescriptionAttribute as CFString,
+                        kAXValueAttribute as CFString] {
+                if let text = attribute(element, key), let name = parseParticipantRow(text) {
+                    roster.append(name)
                 }
             }
         }
@@ -251,10 +317,16 @@ enum ZoomActiveSpeakerReader {
             if let name = parseSpeakingLabel(text) {
                 activeLabels.append(name)
             }
+            if let caption = parseZoomCaptionLine(text) {
+                latestCaption = caption
+            }
         }
 
         for child in children(element) {
-            walk(child, depth: depth + 1, roster: &roster, activeTiles: &activeTiles, activeLabels: &activeLabels)
+            walk(
+                child, depth: depth + 1, roster: &roster, activeTiles: &activeTiles,
+                activeLabels: &activeLabels, selectedTiles: &selectedTiles,
+                latestCaption: &latestCaption)
         }
     }
 
@@ -300,6 +372,54 @@ enum ZoomActiveSpeakerReader {
             }
         }
         return nil
+    }
+
+    /// Zoom live-transcript / closed-caption lines: `"Gui Lima: hello everyone"`.
+    static func parseZoomCaptionLine(_ raw: String) -> CaptionLine? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        let patterns = [
+            #"^(.+?)\s+said:\s+(.+)$"#,
+            #"^(.+?):\s+(.+)$"#,
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+                continue
+            }
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            guard let match = regex.firstMatch(in: text, range: range),
+                  match.numberOfRanges > 2,
+                  let nameRange = Range(match.range(at: 1), in: text),
+                  let bodyRange = Range(match.range(at: 2), in: text) else { continue }
+            let name = String(text[nameRange])
+            let body = String(text[bodyRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard body.count >= 2,
+                  let cleanedName = cleaned(name),
+                  !isParticipantTileDescription(text) else { continue }
+            return CaptionLine(name: cleanedName, text: body)
+        }
+        return nil
+    }
+
+    /// Participants panel rows — plain display names without tile metadata.
+    static func parseParticipantRow(_ raw: String) -> String? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        let lower = text.lowercased()
+        if lower.contains("computer audio") || lower.contains("video on") || lower.contains("active speaker") {
+            return nil
+        }
+        if lower.contains("participant") || lower.contains("meeting") || lower.contains("mute") {
+            return nil
+        }
+        return cleaned(text)
+    }
+
+    private static func isSelected(_ element: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedAttribute as CFString, &value) == .success
+        else { return false }
+        return (value as? Bool) == true
     }
 
     private static func firstCapture(pattern: String, in lower: String, original: String) -> String? {

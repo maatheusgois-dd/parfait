@@ -133,8 +133,9 @@ enum HTMLExporter {
     }
 
     /// Minimal markdown subset: #/##/### headings, paragraphs (blank-line separated),
-    /// **bold**, *italic*, "- " bullets, and "- [ ]"/"- [x]" checkboxes. Anything else
-    /// becomes paragraph text. Input is escaped, so model output can't inject markup.
+    /// **bold**, *italic*, "- " bullets, "- [ ]"/"- [x]" checkboxes, and `---` horizontal
+    /// rules. Anything else becomes paragraph text. Input is escaped, so model output can't
+    /// inject markup.
     static func renderMarkdown(_ md: String) -> String {
         var blocks: [String] = []
         var paragraph: [String] = []
@@ -175,6 +176,10 @@ enum HTMLExporter {
             } else if line.hasPrefix("- ") {
                 flushParagraph()
                 items.append("<li>\(inline(String(line.dropFirst(2))))</li>")
+            } else if isHorizontalRule(line) {
+                flushParagraph()
+                flushList()
+                blocks.append("<hr>")
             } else {
                 flushList()
                 paragraph.append(inline(line))
@@ -199,6 +204,13 @@ enum HTMLExporter {
         out = out.replacing(#/\*\*([^*]+)\*\*/#) { "<strong>\($0.1)</strong>" }
         out = out.replacing(#/\*([^*]+)\*/#) { "<em>\($0.1)</em>" }
         return out
+    }
+
+    private static func isHorizontalRule(_ line: String) -> Bool {
+        let compact = line.replacingOccurrences(of: " ", with: "")
+        guard compact.count >= 3, let char = compact.first else { return false }
+        guard char == "-" || char == "*" || char == "_" else { return false }
+        return compact.allSatisfy { $0 == char }
     }
 
     /// Consecutive segments by the same speaker merge into one turn, mirroring

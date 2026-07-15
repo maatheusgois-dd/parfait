@@ -133,38 +133,54 @@ enum ProcessingPipeline {
             return outcome
         }
 
-        // 2. Speakers — prefer a Zoom active-speaker timeline when we captured one.
+        // 2. Speakers — hybrid: Zoom AX timeline + on-device diarization for gaps.
         var turns: [DiarizedTurn]?
         var namedSpeakers = false
         let platformEvents = archive.platformSpeakerEvents(for: id)
             .filter { !ZoomActiveSpeakerReader.isLocalParticipant($0.name) }
-        let platformTurns = PlatformSpeakerTurnBuilder.turns(
-            from: PlatformSpeakerTurnBuilder.normalized(platformEvents))
+        let roster = archive.zoomRoster(for: id)
         ParfaitConsoleLog.pipeline(
-            "speakers meeting=\(id.uuidString.prefix(8)) platformEvents=\(platformEvents.count) identifySpeakers=\(AppSettings.identifySpeakers)")
-        if !platformTurns.isEmpty {
-            onProgress("Labeling speakers from Zoom…")
-            turns = platformTurns
-            namedSpeakers = true
-            outcome.platformSpeakerAttribution = true
-            ParfaitConsoleLog.pipeline(
-                "using Zoom timeline: \(platformTurns.map { "\($0.speaker) \(String(format: "%.1f", $0.start))-\(String(format: "%.1f", $0.end))" }.joined(separator: ", "))")
-        } else if AppSettings.identifySpeakers, let out = systemOut, !out.segments.isEmpty {
-            ParfaitConsoleLog.pipeline("falling back to on-device diarization")
-            onProgress("Identifying speakers…")
+            "speakers meeting=\(id.uuidString.prefix(8)) platformEvents=\(platformEvents.count)"
+                + " roster=\(roster.count) identifySpeakers=\(AppSettings.identifySpeakers)")
+
+        var diarizedTurns: [DiarizedTurn]?
+        if AppSettings.identifySpeakers, hasSystem {
+            onProgress(platformEvents.isEmpty ? "Identifying speakers…" : "Identifying speakers (hybrid)…")
             do {
-                turns = try await Diarizer.diarize(
-                    fileURL: systemURL,
-                    // The diarizer only ever sees the system (remote-only) channel — the
-                    // local mic is a separate track labeled "me" — so the ceiling is the
-                    // remote-attendee count itself, not +1. The old +1 let a single remote
-                    // voice stay split into "Speaker 1" + "Speaker 2" on a 1:1.
-                    maxSpeakers: meeting.attendees.isEmpty ? nil : meeting.attendees.count)
-            }
-            catch {
+                let maxSpeakers = meeting.attendees.isEmpty
+                    ? (roster.isEmpty ? nil : roster.count)
+                    : meeting.attendees.count
+                diarizedTurns = try await Diarizer.diarize(fileURL: systemURL, maxSpeakers: maxSpeakers)
+            } catch {
                 notices.append(MeetingNotice.speakerIdentificationUnavailable)
                 ParfaitConsoleLog.pipeline("diarization failed — \(error.localizedDescription)")
             }
+        }
+
+        if !platformEvents.isEmpty {
+            if let diarizedTurns, !diarizedTurns.isEmpty {
+                let merged = SpeakerTurnMerger.merge(
+                    platformEvents: platformEvents,
+                    diarized: diarizedTurns,
+                    roster: roster,
+                    attendees: meeting.attendees)
+                turns = merged.turns
+                namedSpeakers = merged.hasNamedSpeakers
+                outcome.platformSpeakerAttribution = true
+                ParfaitConsoleLog.pipeline(
+                    "hybrid timeline: \(merged.turns.map { "\($0.speaker) \(String(format: "%.1f", $0.start))-\(String(format: "%.1f", $0.end))" }.joined(separator: ", "))")
+            } else {
+                onProgress("Labeling speakers from Zoom…")
+                turns = PlatformSpeakerTurnBuilder.turns(
+                    from: PlatformSpeakerTurnBuilder.normalized(platformEvents))
+                namedSpeakers = true
+                outcome.platformSpeakerAttribution = true
+                ParfaitConsoleLog.pipeline(
+                    "using Zoom timeline only: \(turns?.map { "\($0.speaker) \(String(format: "%.1f", $0.start))-\(String(format: "%.1f", $0.end))" }.joined(separator: ", ") ?? "")")
+            }
+        } else if let diarizedTurns {
+            turns = diarizedTurns
+            ParfaitConsoleLog.pipeline("using diarization only (\(diarizedTurns.count) turns)")
         }
 
         let myName = NSFullUserName().isEmpty ? "Me" : NSFullUserName()
@@ -281,6 +297,7 @@ enum ProcessingPipeline {
         meeting: Meeting,
         transcript: String,
         userNotes: String = "",
+        forceProvider: AIProvider? = nil,
         onDelta: (@Sendable (String) -> Void)? = nil
     ) async -> SummaryOutcome {
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -362,6 +379,38 @@ enum ProcessingPipeline {
                 codexError = error.localizedDescription
                 ParfaitConsoleLog.intelligence("codex: \(error.localizedDescription)")
                 return nil
+            }
+        }
+
+        if let forceProvider {
+            let name = forceProvider.displayName
+            let engine: () async -> SummaryOutcome?
+            switch forceProvider {
+            case .apple: engine = apple
+            case .claude: engine = claude
+            case .codex: engine = codex
+            }
+            ParfaitConsoleLog.intelligence("summarize: forced \(name)")
+            if let outcome = await engine() {
+                if case .success(_, let provider) = outcome {
+                    ParfaitConsoleLog.intelligence("summarize: succeeded via \(provider)")
+                }
+                return outcome
+            }
+            switch forceProvider {
+            case .apple:
+                let reason = AppleSummarizer.unavailableReason ?? "Apple Intelligence is unavailable"
+                return .failure("\(reason) — couldn't regenerate with Apple Intelligence.")
+            case .claude:
+                if let claudeError {
+                    return .failure("Summary failed via Claude: \(claudeError)")
+                }
+                return .failure("Claude isn't ready — install the CLI and sign in, then try again.")
+            case .codex:
+                if let codexError {
+                    return .failure("Summary failed via Codex: \(codexError)")
+                }
+                return .failure("Codex isn't ready — install the CLI and sign in, then try again.")
             }
         }
 

@@ -73,6 +73,14 @@ enum AIProvider: String, CaseIterable, Identifiable, Hashable {
 
     /// Assistants that can answer questions about meetings in-app.
     static let askChoices: [AIProvider] = [.apple, .claude, .codex]
+
+    var isAvailableForSummary: Bool {
+        switch self {
+        case .apple: AppleSummarizer.isAvailable
+        case .claude: ClaudeCLI.isInstalled && ClaudeCLI.isLoggedIn()
+        case .codex: CodexCLI.isReady
+        }
+    }
 }
 
 enum AskDeliveryMode: String, CaseIterable, Identifiable, Hashable {

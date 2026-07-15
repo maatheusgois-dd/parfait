@@ -96,6 +96,7 @@ final class RecordingServiceImpl: RecordingService {
             }
             archive.removeLiveTranscript(for: meetingID)
             archive.removePlatformSpeakerEvents(for: meetingID)
+            archive.removeZoomRoster(for: meetingID)
         }
 
         meeting.state = .recording

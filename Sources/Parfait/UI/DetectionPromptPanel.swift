@@ -203,7 +203,7 @@ final class DetectionPromptController {
     private func ensurePanel() -> FloatingPanel {
         if let panel { return panel }
         let panel = FloatingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 340, height: 160),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 150),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered, defer: false)
         panel.level = .floating
@@ -537,39 +537,118 @@ private struct DetectionPromptView: View {
     let onRecord: () -> Void
     let onDismiss: () -> Void
     @Environment(\.colorScheme) private var scheme
-    @Environment(\.parfaitActionColor) private var actionColor
+
+    private let cardWidth: CGFloat = 480
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "record.circle.fill").foregroundStyle(actionColor)
-                Text("Record this meeting?")
-                    .font(.parfait(15, .semibold))
-                    .foregroundStyle(Theme.ink(scheme))
-            }
-            Text("\(appName) is using your microphone.")
-                .font(.parfait(12))
-                .foregroundStyle(.secondary)
-            HStack(spacing: 8) {
-                Button(action: onRecord) {
-                    Text("Record")
-                        .font(.parfait(13, .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 3)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(actionColor)
-                Button("Dismiss", action: onDismiss)
+        VStack(spacing: -6) {
+            headerCard
+            actionBar
+        }
+        .frame(width: cardWidth)
+        .shadow(color: .black.opacity(scheme == .dark ? 0.45 : 0.18), radius: 24, y: 10)
+        .padding(20) // transparent margin so the shadow isn't clipped by the panel bounds
+        .overlay { WindowDragArea() }
+    }
+
+    private var headerCard: some View {
+        HStack(spacing: 12) {
+            dragHandle
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Call detected")
+                    .font(.parfait(18, .semibold))
+                    .foregroundStyle(Theme.heading(scheme))
+                Text(appName)
                     .font(.parfait(13))
-                    .buttonStyle(.bordered)
+                    .foregroundStyle(Theme.secondary(scheme))
+            }
+            Spacer(minLength: 8)
+            takeNotesBadge
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, 12)
+        .padding(.vertical, 14)
+        .background(Theme.panel(scheme), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(.primary.opacity(0.08)))
+        .overlay(alignment: .top) {
+            Capsule()
+                .fill(Theme.blueberry(scheme).opacity(0.55))
+                .frame(width: cardWidth * 0.42, height: 2)
+                .offset(y: -1)
+        }
+    }
+
+    private var dragHandle: some View {
+        VStack(spacing: 3) {
+            ForEach(0..<6, id: \.self) { _ in
+                Circle()
+                    .fill(Theme.tertiary(scheme).opacity(0.55))
+                    .frame(width: 3, height: 3)
             }
         }
-        .padding(16)
-        .frame(width: 300, alignment: .leading)
-        .background(Theme.surface(scheme), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.primary.opacity(0.08)))
-        .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
-        .padding(20) // transparent margin so the shadow isn't clipped by the panel bounds
+        .frame(width: 12)
+        .padding(.leading, 8)
+    }
+
+    private var takeNotesBadge: some View {
+        HStack(spacing: 10) {
+            ParfaitStripes()
+                .scaleEffect(0.42)
+                .frame(width: 20, height: 26)
+                .padding(4)
+                .background(
+                    Color(red: 0.78, green: 0.91, blue: 0.35),
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            Text("Take notes")
+                .font(.parfait(14, .medium))
+                .foregroundStyle(Theme.heading(scheme))
+            Divider()
+                .frame(height: 26)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.tertiary(scheme))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(.primary.opacity(0.06)))
+    }
+
+    private var actionBar: some View {
+        HStack(spacing: 12) {
+            Button(action: onRecord) {
+                Text("Record")
+                    .font(.parfait(14, .medium))
+                    .foregroundStyle(Theme.heading(scheme))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.plain)
+            .background(Theme.card(scheme), in: Capsule())
+            Button(action: onDismiss) {
+                Text("Dismiss")
+                    .font(.parfait(14, .medium))
+                    .foregroundStyle(Theme.heading(scheme))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            scheme == .dark
+                ? Color(red: 0.12, green: 0.12, blue: 0.12)
+                : Color(red: 0.22, green: 0.22, blue: 0.22),
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(.primary.opacity(0.06)))
+        .padding(.horizontal, 8)
     }
 }
 

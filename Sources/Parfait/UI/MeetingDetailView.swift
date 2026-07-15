@@ -477,6 +477,20 @@ struct MeetingDetailView: View {
                 Button("With current template") {
                     Task { await app.regenerateSummary(meetingID: meeting.id) }
                 }
+                if !regenerateProviderChoices.isEmpty {
+                    Divider()
+                    Menu("With another AI") {
+                        ForEach(regenerateProviderChoices) { provider in
+                            Button(provider.displayName) {
+                                Task {
+                                    await app.regenerateSummary(
+                                        meetingID: meeting.id, forceProvider: provider)
+                                }
+                            }
+                            .disabled(!provider.isAvailableForSummary)
+                        }
+                    }
+                }
             }
         } label: {
             Image(systemName: "ellipsis")
@@ -490,6 +504,10 @@ struct MeetingDetailView: View {
 
     private var hasTranscript: Bool {
         !app.store.transcript(for: meeting.id).isEmpty
+    }
+
+    private var regenerateProviderChoices: [AIProvider] {
+        AIProvider.allCases.filter { $0.rawValue != meeting.summaryProvider }
     }
 
     @ViewBuilder

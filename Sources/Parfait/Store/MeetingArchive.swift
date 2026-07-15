@@ -191,6 +191,30 @@ final class MeetingArchive: @unchecked Sendable {
         queue.sync { try? FileManager.default.removeItem(at: platformSpeakerEventsURL(for: id)) }
     }
 
+    // MARK: - Zoom roster snapshot (participants panel / video tiles)
+
+    func zoomRosterURL(for id: UUID) -> URL {
+        folder(for: id).appendingPathComponent("zoom_roster.json")
+    }
+
+    func zoomRoster(for id: UUID) -> [String] {
+        queue.sync {
+            guard let data = try? Data(contentsOf: zoomRosterURL(for: id)) else { return [] }
+            return (try? decoder.decode([String].self, from: data)) ?? []
+        }
+    }
+
+    func saveZoomRoster(_ names: [String], for id: UUID) {
+        queue.sync {
+            guard let data = try? encoder.encode(names) else { return }
+            try? data.write(to: zoomRosterURL(for: id), options: .atomic)
+        }
+    }
+
+    func removeZoomRoster(for id: UUID) {
+        queue.sync { try? FileManager.default.removeItem(at: zoomRosterURL(for: id)) }
+    }
+
     // MARK: - Summary
 
     func summary(for id: UUID) -> String {

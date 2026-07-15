@@ -88,8 +88,9 @@ final class MeetingDetailViewModel: ObservableObject {
         refreshMeeting()
     }
 
-    func regenerateSummary(templateName: String? = nil) async {
-        await regenerateSummary.execute(meetingID: meeting.id, templateName: templateName)
+    func regenerateSummary(templateName: String? = nil, forceProvider: AIProvider? = nil) async {
+        await regenerateSummary.execute(
+            meetingID: meeting.id, templateName: templateName, forceProvider: forceProvider)
         refreshMeeting()
     }
 

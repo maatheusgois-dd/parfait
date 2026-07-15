@@ -125,6 +125,7 @@ final class MockProcessingService: ProcessingService, @unchecked Sendable {
         meeting: Meeting,
         transcript: String,
         userNotes: String,
+        forceProvider: AIProvider? = nil,
         onDelta: (@Sendable (String) -> Void)?
     ) async -> ProcessingPipeline.SummaryOutcome {
         summarizeCallCount += 1

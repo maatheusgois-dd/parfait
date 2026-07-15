@@ -72,6 +72,7 @@ protocol ProcessingService: Sendable {
         meeting: Meeting,
         transcript: String,
         userNotes: String,
+        forceProvider: AIProvider?,
         onDelta: (@Sendable (String) -> Void)?
     ) async -> ProcessingPipeline.SummaryOutcome
 

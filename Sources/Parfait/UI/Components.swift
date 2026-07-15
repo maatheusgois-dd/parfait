@@ -609,7 +609,7 @@ struct EmptyStateView: View {
 }
 
 /// Minimal markdown display for summaries: headings, bullets, checkboxes,
-/// inline bold/italic. Anything else renders as a plain paragraph.
+/// horizontal rules (`---`), inline bold/italic. Anything else renders as a plain paragraph.
 struct MarkdownText: View {
     enum Style {
         case card
@@ -678,6 +678,10 @@ struct MarkdownText: View {
                     .foregroundStyle(Theme.secondary(scheme))
             }
             .padding(.leading, style == .document ? 4 : 0)
+        } else if Self.isHorizontalRule(trimmed) {
+            Divider()
+                .opacity(style == .document ? 0.35 : 0.5)
+                .padding(.vertical, style == .document ? 6 : 4)
         } else {
             inline(trimmed)
                 .font(.parfait(bodySize))
@@ -692,5 +696,13 @@ struct MarkdownText: View {
             return Text(attributed)
         }
         return Text(text)
+    }
+
+    /// Markdown horizontal rule: `---`, `***`, or `___` (3+ chars, spaces allowed).
+    private static func isHorizontalRule(_ line: String) -> Bool {
+        let compact = line.replacingOccurrences(of: " ", with: "")
+        guard compact.count >= 3, let char = compact.first else { return false }
+        guard char == "-" || char == "*" || char == "_" else { return false }
+        return compact.allSatisfy { $0 == char }
     }
 }

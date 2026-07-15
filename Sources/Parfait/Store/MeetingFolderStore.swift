@@ -45,31 +45,44 @@ final class MeetingFolderStore: ObservableObject {
         reload()
     }
 
-    func deleteFolder(id: UUID, meetingStore: MeetingStore) {
-        for meeting in meetingStore.meetings where meeting.folderID == id {
+    func deleteFolder(id: UUID, meetingRepository: MeetingRepository) {
+        for meeting in meetingRepository.meetings where meeting.folderID == id {
             var m = meeting
             m.folderID = nil
-            meetingStore.upsert(m)
+            meetingRepository.upsert(m)
         }
         try? archive.deleteFolder(id: id)
         reload()
     }
 
-    func assign(meetingID: UUID, to folderID: UUID?, meetingStore: MeetingStore) {
-        guard var meeting = meetingStore.meeting(id: meetingID) else { return }
+    func assign(meetingID: UUID, to folderID: UUID?, meetingRepository: MeetingRepository) {
+        guard var meeting = meetingRepository.meeting(id: meetingID) else { return }
         meeting.folderID = folderID
-        meetingStore.upsert(meeting)
+        meetingRepository.upsert(meeting)
         if let folderID {
-            setRuleAndBackfill(for: meeting, folderID: folderID, meetingStore: meetingStore)
+            setRuleAndBackfill(for: meeting, folderID: folderID, meetingRepository: meetingRepository)
         }
     }
 
-    func assign(calendarTitle: String, to folderID: UUID, meetingStore: MeetingStore) {
+    func assign(calendarTitle: String, to folderID: UUID, meetingRepository: MeetingRepository) {
         let key = FolderTitleNormalizer.key(for: calendarTitle)
         guard !key.isEmpty else { return }
         try? archive.setRule(normalizedTitle: key, folderID: folderID)
         reload()
-        backfillUnfiled(forKey: key, folderID: folderID, meetingStore: meetingStore)
+        backfillUnfiled(forKey: key, folderID: folderID, meetingRepository: meetingRepository)
+    }
+
+    /// Legacy alias for views not yet on `MeetingRepository`.
+    func deleteFolder(id: UUID, meetingStore: MeetingStore) {
+        deleteFolder(id: id, meetingRepository: meetingStore)
+    }
+
+    func assign(meetingID: UUID, to folderID: UUID?, meetingStore: MeetingStore) {
+        assign(meetingID: meetingID, to: folderID, meetingRepository: meetingStore)
+    }
+
+    func assign(calendarTitle: String, to folderID: UUID, meetingStore: MeetingStore) {
+        assign(calendarTitle: calendarTitle, to: folderID, meetingRepository: meetingStore)
     }
 
     func folder(forTitle title: String) -> MeetingFolder? {
@@ -90,25 +103,25 @@ final class MeetingFolderStore: ObservableObject {
     // MARK: - Private
 
     private func setRuleAndBackfill(
-        for meeting: Meeting, folderID: UUID, meetingStore: MeetingStore
+        for meeting: Meeting, folderID: UUID, meetingRepository: MeetingRepository
     ) {
         let raw = meeting.calendarEventTitle ?? meeting.title
         let key = FolderTitleNormalizer.key(for: raw)
         guard !key.isEmpty else { return }
         try? archive.setRule(normalizedTitle: key, folderID: folderID)
         reload()
-        backfillUnfiled(forKey: key, folderID: folderID, meetingStore: meetingStore)
+        backfillUnfiled(forKey: key, folderID: folderID, meetingRepository: meetingRepository)
     }
 
     private func backfillUnfiled(
-        forKey key: String, folderID: UUID, meetingStore: MeetingStore
+        forKey key: String, folderID: UUID, meetingRepository: MeetingRepository
     ) {
-        for meeting in meetingStore.meetings where meeting.folderID == nil {
+        for meeting in meetingRepository.meetings where meeting.folderID == nil {
             let raw = meeting.calendarEventTitle ?? meeting.title
             guard FolderTitleNormalizer.key(for: raw) == key else { continue }
             var m = meeting
             m.folderID = folderID
-            meetingStore.upsert(m)
+            meetingRepository.upsert(m)
         }
     }
 }

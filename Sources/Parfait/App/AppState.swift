@@ -6,89 +6,56 @@ import os
 import SwiftUI
 import UserNotifications
 
-/// Progressive-summary phase for a meeting, driving the Notes tab badge.
-enum SummaryProgress {
-    /// The notes are streaming in (a draft, or the sole pass when there's no live transcript).
-    case streaming
-    /// A draft is on screen and the improvement pass is running.
-    case improving
-}
-
 @MainActor
 final class AppState: NSObject, ObservableObject {
-    static let shared = AppState()
+    static let shared: AppState = {
+        MainActor.assumeIsolated {
+            AppState(container: DependencyContainer.live())
+        }
+    }()
 
-    let store = MeetingStore()
-    let templates = TemplateStore()
-    let calendar = CalendarStore()
-    let folders = MeetingFolderStore()
+    private let container: DependencyContainer
+
+    var store: MeetingStore { container.meetingStore }
+    var templates: TemplateStore { container.templateStore }
+    var calendar: CalendarStore { container.calendarStore }
+    var folders: MeetingFolderStore { container.folderStore }
 
     @Published private(set) var session: RecordingSession?
     @Published private(set) var recordingMeeting: Meeting?
-    /// The floating recording card is hidden because the user closed it. Reset on
-    /// each new recording; re-openable from the menu bar.
     @Published var recordingCardDismissed = false
-    /// Collapsed to the compact pill handle (Granola-style). Reset on each new recording.
     @Published var recordingCardMinimized = true
-    /// User preference — when false, the floating live transcript never appears.
-    @Published var showLiveRecordingCard = AppSettings.showLiveRecordingCard
-    /// meeting id → human-readable pipeline stage, while processing.
+    @Published var showLiveRecordingCard: Bool
     @Published private(set) var processingStage: [UUID: String] = [:]
-    /// meeting id → notes being streamed in right now. The Notes tab shows this in
-    /// place of the saved summary while present (draft or sole pass).
     @Published private(set) var streamingSummaries: [UUID: String] = [:]
-    /// meeting id → progressive-summary phase, for the Notes tab badge.
     @Published private(set) var summaryProgress: [UUID: SummaryProgress] = [:]
-    /// A meeting-ish app started using the mic and we're waiting on the user.
     @Published private(set) var detectedAppName: String?
     @Published var lastError: String?
-    /// Set by the menu bar to steer the main window's selection.
     @Published var openMeetingID: UUID?
-    /// Apps currently holding the mic open, live and independent of recording
-    /// state — feeds auto-stop (any recording, not just auto-started ones) and
-    /// the Settings "currently hearing" diagnostic row.
     @Published private(set) var activeMicApps: [pid_t: String] = [:]
     @Published private(set) var notificationAuthStatus: UNAuthorizationStatus = .notDetermined
     var activeMicAppNames: [String] { Array(Set(activeMicApps.values)).sorted() }
 
-    private let detector = MeetingDetector()
-    /// The detection currently surfaced to the user (menu-bar glyph + banner + notification).
-    private var pendingDetection: MicEvent?
-    /// Every mic app detected but not yet decided, keyed by pid. When the surfaced app releases,
-    /// the next entry is promoted so a still-live meeting keeps prompting — the detector only
-    /// emits on transitions, so an already-running app never re-announces itself.
-    private var pendingDetections: [pid_t: MicEvent] = [:]
-    /// Last time we announced (notification + chime) a detection per pid, to suppress a repeat
-    /// announce on a quick mic reconnect while still allowing a genuinely new later meeting.
-    private var lastDetectionAnnounce: [pid_t: ContinuousClock.Instant] = [:]
-    private static let announceCooldown: Duration = .seconds(15)
-    private var pendingAutoStop: Task<Void, Never>?
-    /// Retains the detection chime while it plays — a temporary NSSound can be
-    /// deallocated mid-play. Replaced on each detection.
-    private var detectionChime: NSSound?
-    private static let autoStopGrace: Duration = .seconds(8)
-    private let log = Logger(subsystem: "io.github.conrad-vanl.Parfait", category: "detection")
-    /// Closes the reentrancy window between startRecording's guard and its
-    /// `session =` assignment (mic-permission dialog, calendar lookup).
-    private var isStartingRecording = false
     private var cancellables = Set<AnyCancellable>()
 
     func meetingForCalendarEvent(_ eventID: String) -> Meeting? {
-        store.meetings
-            .filter { $0.calendarEventID == eventID }
-            .max(by: { $0.createdAt < $1.createdAt })
+        container.calendarRepository.meetingForCalendarEvent(eventID, in: store.meetings)
     }
 
     var isRecording: Bool { session != nil }
 
-    private override init() {
+    private init(container: DependencyContainer) {
+        self.container = container
+        showLiveRecordingCard = container.settings.showLiveRecordingCard
         super.init()
+        wireUseCaseCallbacks()
+        wireDetectionCoordinator()
+        wireStoreForwarding()
+    }
+
+    private func wireStoreForwarding() {
         AppSettings.registerDefaults()
-        // Property initializers run before init(), so UserDefaults-backed prefs read
-        // false until registerDefaults() — refresh so the floating card matches Settings.
-        showLiveRecordingCard = AppSettings.showLiveRecordingCard
-        // Views observe AppState; meeting data lives on the nested store.
-        // Forward its change signal or store-only mutations never refresh UI.
+        showLiveRecordingCard = container.settings.showLiveRecordingCard
         store.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
@@ -100,392 +67,189 @@ final class AppState: NSObject, ObservableObject {
             .store(in: &cancellables)
     }
 
+    private func wireUseCaseCallbacks() {
+        container.processMeeting.onProgress = { [weak self] id, stage in
+            if let stage { self?.processingStage[id] = stage }
+            else { self?.processingStage[id] = nil }
+        }
+        container.processMeeting.onSummaryProgress = { [weak self] id, progress in
+            self?.summaryProgress[id] = progress
+        }
+        container.processMeeting.onSummaryUpdate = { [weak self] id, update in
+            self?.applySummaryUpdate(update, for: id)
+        }
+        container.regenerateSummary.onProgress = { [weak self] id, stage in
+            if let stage { self?.processingStage[id] = stage }
+            else { self?.processingStage[id] = nil }
+        }
+        container.regenerateSummary.onStreamingSummary = { [weak self] id, text in
+            if let text { self?.streamingSummaries[id] = text }
+            else { self?.streamingSummaries[id] = nil }
+        }
+        container.regenerateSummary.onSummaryProgress = { [weak self] id, progress in
+            self?.summaryProgress[id] = progress
+        }
+    }
+
+    private func wireDetectionCoordinator() {
+        let coordinator = container.detectionCoordinator
+        coordinator.isRecording = { [weak self] in self?.isRecording ?? false }
+        coordinator.isStartingRecording = { [weak self] in
+            self?.container.recordingService.isStartingRecording ?? false
+        }
+        coordinator.onDetectedAppNameChanged = { [weak self] name in
+            self?.detectedAppName = name
+        }
+        coordinator.onActiveMicAppsChanged = { [weak self] apps in
+            self?.activeMicApps = apps
+        }
+        coordinator.onDetectionChime = { [weak self] in
+            self?.container.notificationService.playDetectionChime()
+        }
+    }
+
     func bootstrap() {
-        configureNotifications()
+        container.notificationService.configure { [weak self] id in
+            Task { @MainActor in
+                self?.openMeetingID = id
+            }
+        }
         finalizeOrphans()
         Task.detached {
             _ = ClaudeCLI.resolveBlocking()
             _ = CodexCLI.resolveBlocking()
-        } // warm CLI probes off-main
-        // Clear a "System Audio Recording" indicator left stuck by a previously hard-killed
-        // process. Off-main (coreaudiod IPC can stall at launch), but gated BEFORE detection
-        // starts so the name-based sweep can never race a live tap of ours and destroy it.
+        }
         Task { @MainActor in
             await Task.detached { SystemAudioTap.destroyLeftoverAggregates() }.value
-            if AppSettings.detectMeetings { startDetection() }
+            if container.settings.detectMeetings { startDetection() }
             await calendar.refreshAgenda()
+            notificationAuthStatus = await container.notificationService.refreshAuthorizationStatus()
         }
     }
 
-    /// Called from applicationShouldTerminate: finalize audio files so the
-    /// recording survives, and let the next launch pick it up as an orphan.
     func prepareForTermination() {
-        guard let session, let meeting = recordingMeeting else { return }
-        session.stop()
-        if var fresh = store.meeting(id: meeting.id) ?? recordingMeeting {
-            fresh.duration = session.elapsed
-            fresh.state = .processing
-            store.upsert(fresh)
-        }
-        self.session = nil
+        container.recordingService.prepareForTermination(meetingRepository: store)
+        session = nil
         recordingMeeting = nil
     }
 
     // MARK: - Detection
 
     func startDetection() {
-        detector.start { [weak self] event in
-            Task { @MainActor in self?.handle(event) }
-        }
+        container.detectionCoordinator.start()
     }
 
     func stopDetection() {
-        detector.stop()
-        detectedAppName = nil
-        pendingDetection = nil
-        pendingDetections.removeAll()
-        lastDetectionAnnounce.removeAll()
-        // detector.stop() drops its listeners without emitting closing false events,
-        // so any still-running pid would linger here and permanently block auto-stop.
-        activeMicApps.removeAll()
-        pendingAutoStop?.cancel()
-        pendingAutoStop = nil
+        container.detectionCoordinator.stop()
     }
 
-    private func handle(_ event: MicEvent) {
-        guard !MeetingDetector.isIgnored(bundleID: event.bundleID) else { return }
-        let name = MeetingDetector.displayName(for: event)
-        log.debug("mic \(name, privacy: .public) pid=\(event.pid) running=\(event.isRunningInput)")
-
-        if event.isRunningInput {
-            activeMicApps[event.pid] = name
-            pendingAutoStop?.cancel(); pendingAutoStop = nil // any live meeting app cancels a pending stop
-
-            if isRecording { return }
-            guard !isStartingRecording else { return }
-            if AppSettings.autoRecord {
-                Task { await startRecording(sourceApp: name, trigger: event) }
-            } else {
-                // A mic reconnect blip (drop + re-grab, which the auto-stop path below also
-                // debounces) shouldn't re-fire the chime for a meeting we just announced. Still
-                // re-surface the prompt (card + glyph) visually; only gate the chime.
-                let now = ContinuousClock.now
-                let recentlyAnnounced = lastDetectionAnnounce[event.pid]
-                    .map { now - $0 < Self.announceCooldown } ?? false
-                lastDetectionAnnounce[event.pid] = now
-                pendingDetections[event.pid] = event
-                detectedAppName = name
-                pendingDetection = event
-                if !recentlyAnnounced { chime() }
-            }
-        } else {
-            activeMicApps.removeValue(forKey: event.pid)
-            pendingDetections.removeValue(forKey: event.pid)
-            if !isRecording, event.pid == pendingDetection?.pid {
-                // The app we were prompting for released. Surface the next still-undecided app so
-                // an ongoing meeting keeps prompting instead of the prompt vanishing for good.
-                if let next = pendingDetections.values.first {
-                    detectedAppName = MeetingDetector.displayName(for: next)
-                    pendingDetection = next
-                } else {
-                    detectedAppName = nil
-                    pendingDetection = nil
-                }
-            }
-            // All detected mic apps quiet — debounced (apps drop and re-grab
-            // during reconnects) — before treating the meeting as over. Applies
-            // to any recording, not just auto/accepted-start ones.
-            guard isRecording, AppSettings.autoStopRecording, activeMicApps.isEmpty else { return }
-            log.debug("all detected mic apps quiet — arming \(Self.autoStopGrace)s auto-stop")
-            pendingAutoStop = Task { [weak self] in
-                try? await Task.sleep(for: Self.autoStopGrace)
-                guard !Task.isCancelled else { return }
-                await self?.autoStop()
-            }
+    func acceptDetection() async {
+        lastError = nil
+        resetRecordingCardState()
+        switch await container.startRecording.execute(
+            sourceApp: detectedAppName,
+            calendarEvent: nil) {
+        case .success(let handle):
+            applyRecordingHandle(handle)
+        case .failure(let error):
+            lastError = error.localizedDescription
         }
     }
 
-    private func autoStop() async {
-        // Re-check everything: the recording may have ended, the mic reconnected, or
-        // the user disabled auto-stop during the grace window.
-        guard isRecording, AppSettings.autoStopRecording, activeMicApps.isEmpty else { return }
-        log.info("auto-stopping — meeting app released the mic")
-        await stopRecording()
+    func dismissDetection() {
+        container.detectionCoordinator.dismissDetection()
     }
 
     // MARK: - Recording
-
-    /// User accepted a detection (menu banner or notification action).
-    func acceptDetection() async {
-        let event = pendingDetection
-        let name = detectedAppName ?? event.map(MeetingDetector.displayName)
-        await startRecording(sourceApp: name, trigger: event)
-    }
 
     func startRecording(
         sourceApp: String? = nil,
         trigger: MicEvent? = nil,
         calendarEvent: CalendarEventSummary? = nil
     ) async {
-        guard !isRecording, !isStartingRecording else { return }
-        isStartingRecording = true
-        defer { isStartingRecording = false }
-        pendingAutoStop?.cancel()
-        pendingAutoStop = nil
-        detectedAppName = nil
-        pendingDetection = nil
-        pendingDetections.removeAll() // one recording covers the whole meeting, whatever grabbed the mic
         lastError = nil
-
-        if !MicRecorder.permissionGranted {
-            _ = await MicRecorder.requestPermission()
-        }
-
-        var meeting = Meeting(title: Meeting.placeholderTitle(for: Date()), createdAt: Date())
-        meeting.sourceApp = sourceApp
-        meeting.templateName = AppSettings.defaultTemplate
-
-        if let calendarEvent {
-            meeting.title = calendarEvent.title
-            meeting.calendarEventTitle = calendarEvent.title
-            meeting.attendees = calendarEvent.attendees
-            meeting.calendarEventID = calendarEvent.id
-            meeting.calendarEventStart = calendarEvent.start
-            meeting.calendarEventEnd = calendarEvent.end
-        } else if AppSettings.useCalendar, CalendarAuthorization.isAuthorized,
-                  let event = await calendar.currentEvent(at: .now, sourceApp: sourceApp) {
-            meeting.title = event.title
-            meeting.calendarEventTitle = event.title
-            meeting.attendees = event.attendees
-            meeting.calendarEventID = event.id
-            meeting.calendarEventStart = event.start
-            meeting.calendarEventEnd = event.end
-        }
-
-        if let title = meeting.calendarEventTitle,
-           let folder = folders.folder(forTitle: title) {
-            meeting.folderID = folder.id
-        }
-
-        // A competing start may have won while we awaited the dialogs above.
-        guard !isRecording else { return }
-
-        let archive = store.archive
-        do {
-            try archive.createFolder(for: meeting.id)
-        } catch {
+        resetRecordingCardState()
+        container.detectionCoordinator.dismissDetection()
+        switch await container.startRecording.execute(
+            sourceApp: sourceApp,
+            calendarEvent: calendarEvent) {
+        case .success(let handle):
+            applyRecordingHandle(handle)
+        case .failure(let error):
             lastError = error.localizedDescription
-            return
         }
-
-        let newSession = RecordingSession(meetingID: meeting.id, archive: archive)
-        do {
-            try newSession.start(
-                micURL: archive.micURL(for: meeting.id),
-                systemURL: archive.systemURL(for: meeting.id))
-        } catch {
-            lastError = error.localizedDescription
-            try? FileManager.default.removeItem(at: archive.folder(for: meeting.id))
-            return
-        }
-        meeting.notice = newSession.startupNotice
-        store.upsert(meeting)
-        recordingMeeting = meeting
-        recordingCardDismissed = false // a fresh recording shows the card
-        recordingCardMinimized = true
-        session = newSession
     }
 
     func stopRecording() async {
-        guard let session, let meeting = recordingMeeting else { return }
-        clearRecordingState()
-        session.stop()
-        // Re-fetch: the user may have retitled the meeting while it recorded.
-        var fresh = store.meeting(id: meeting.id) ?? meeting
-        fresh.duration = session.elapsed
-        store.upsert(fresh)
-        // Detached on purpose: an auto-stop runs *inside* the pendingAutoStop task, which
-        // clearRecordingState() just cancelled — awaiting process() here would run the whole
-        // transcription pipeline in a cancelled task and every await would throw
-        // CancellationError. A fresh task keeps processing independent of how we stopped.
-        Task { await self.process(fresh) }
+        session = nil
+        recordingMeeting = nil
+        _ = await container.stopRecording.execute()
     }
 
     func discardRecording() {
-        guard let session, let meeting = recordingMeeting else { return }
-        clearRecordingState()
-        session.stop()
-        store.delete(id: meeting.id)
-    }
-
-    /// Opens an upcoming calendar event for prep (side notes) or its existing meeting.
-    func openCalendarEvent(_ event: CalendarEventSummary) {
-        if let existing = meetingForCalendarEvent(event.id) {
-            openMeetingID = existing.id
-        } else {
-            Task { await prepareMeeting(calendarEvent: event) }
-        }
-    }
-
-    /// Creates a meeting folder and metadata for an upcoming event without starting capture.
-    func prepareMeeting(calendarEvent: CalendarEventSummary) async {
-        var meeting = Meeting(title: calendarEvent.title, createdAt: Date())
-        meeting.state = .prep
-        meeting.calendarEventTitle = calendarEvent.title
-        meeting.attendees = calendarEvent.attendees
-        meeting.calendarEventID = calendarEvent.id
-        meeting.calendarEventStart = calendarEvent.start
-        meeting.calendarEventEnd = calendarEvent.end
-        meeting.templateName = AppSettings.defaultTemplate
-
-        if let title = meeting.calendarEventTitle,
-           let folder = folders.folder(forTitle: title) {
-            meeting.folderID = folder.id
-        }
-
-        let archive = store.archive
-        do {
-            try archive.createFolder(for: meeting.id)
-        } catch {
-            lastError = error.localizedDescription
-            return
-        }
-        store.upsert(meeting)
-        openMeetingID = meeting.id
-    }
-
-    /// Resume capture on an existing meeting — retries a failed/empty capture,
-    /// appends new audio to a finished meeting, or starts capture from a prep meeting.
-    /// Reuses the same folder and calendar metadata; prior transcript and notes are kept
-    /// when appending.
-    func continueRecording(meetingID: UUID) async {
-        guard !isRecording, !isStartingRecording else { return }
-        guard var meeting = store.meeting(id: meetingID) else { return }
-        let fromPrep = meeting.canStartFromPrep(isRecording: false)
-        guard fromPrep || meeting.canContinueRecording(isRecording: false) else { return }
-
-        isStartingRecording = true
-        defer { isStartingRecording = false }
-        pendingAutoStop?.cancel()
-        pendingAutoStop = nil
-        detectedAppName = nil
-        pendingDetection = nil
-        pendingDetections.removeAll()
-        lastError = nil
-
-        if !MicRecorder.permissionGranted {
-            _ = await MicRecorder.requestPermission()
-        }
-        guard !isRecording else { return }
-
-        let archive = store.archive
-        if !fromPrep {
-            for url in [archive.micURL(for: meetingID), archive.systemURL(for: meetingID)] {
-                try? FileManager.default.removeItem(at: url)
-            }
-            archive.removeLiveTranscript(for: meetingID)
-        }
-
-        meeting.state = .recording
-        meeting.notice = nil
-        store.upsert(meeting)
-
-        let newSession = RecordingSession(
-            meetingID: meeting.id, archive: archive, elapsedOffset: meeting.duration)
-        do {
-            try newSession.start(
-                micURL: archive.micURL(for: meeting.id),
-                systemURL: archive.systemURL(for: meeting.id))
-        } catch {
-            meeting.state = .failed
-            meeting.notice = error.localizedDescription
-            store.upsert(meeting)
-            lastError = error.localizedDescription
-            return
-        }
-        meeting.notice = newSession.startupNotice
-        store.upsert(meeting)
-        recordingMeeting = meeting
-        recordingCardDismissed = false
-        recordingCardMinimized = true
-        session = newSession
-        openMeetingID = meeting.id
-    }
-
-    private func clearRecordingState() {
-        pendingAutoStop?.cancel()
-        pendingAutoStop = nil
         session = nil
         recordingMeeting = nil
+        container.discardRecording.execute()
     }
 
-    func dismissDetection() {
-        // Declining means "don't record this meeting" — drop every undecided app so a second
-        // one (a browser tab alongside Zoom) doesn't immediately re-prompt.
-        detectedAppName = nil
-        pendingDetection = nil
-        pendingDetections.removeAll()
+    func openCalendarEvent(_ event: CalendarEventSummary) {
+        Task {
+            switch await container.openCalendarEvent.execute(event) {
+            case .openExisting(let id), .prepared(let id):
+                openMeetingID = id
+            case .failed:
+                lastError = "Could not prepare meeting."
+            }
+        }
+    }
+
+    func prepareMeeting(calendarEvent: CalendarEventSummary) async {
+        switch container.prepareMeeting.execute(calendarEvent: calendarEvent) {
+        case .success(let meeting):
+            openMeetingID = meeting.id
+        case .failure(let error):
+            lastError = error.localizedDescription
+        }
+    }
+
+    func continueRecording(meetingID: UUID) async {
+        lastError = nil
+        resetRecordingCardState()
+        container.detectionCoordinator.dismissDetection()
+        switch await container.continueRecording.execute(meetingID: meetingID) {
+        case .success(let handle):
+            applyRecordingHandle(handle)
+            openMeetingID = handle.meeting.id
+        case .failure(let error):
+            lastError = error.localizedDescription
+        }
+    }
+
+    private func applyRecordingHandle(_ handle: RecordingSessionHandle) {
+        session = handle.session
+        recordingMeeting = handle.meeting
+    }
+
+    private func resetRecordingCardState() {
+        recordingCardDismissed = false
+        recordingCardMinimized = true
     }
 
     // MARK: - Processing
 
     func process(_ meeting: Meeting) async {
-        let id = meeting.id
-        processingStage[id] = "Starting…"
-        var entry = store.meeting(id: id) ?? meeting
-        entry.state = .processing
-        // Surface the live transcript immediately so the Transcript tab isn't blank
-        // while the accurate, diarized version is still being built. When resuming,
-        // merge onto any segments already on disk.
-        let existing = store.transcript(for: id)
-        let live = store.archive.liveTranscript(for: id)
-        if !live.isEmpty {
-            let offset = Self.appendOffset(meeting: entry, prior: existing)
-            let merged = existing + Self.offsetSegments(live, by: offset)
-            try? store.archive.saveTranscript(merged, for: id)
-            if existing.isEmpty { entry.speakers = LiveTranscriber.speakers }
-        }
-        store.upsert(entry)
-        let titleAtEntry = entry.title
-
-        let outcome = await ProcessingPipeline.run(
-            meeting: entry, archive: store.archive,
-            onProgress: { stage in
-                Task { @MainActor in AppState.shared.processingStage[id] = stage }
-            },
-            onSummary: { update in
-                // Ordered main-thread delivery (FIFO) so streamed deltas and the
-                // draftSaved/done markers never arrive out of order.
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated { AppState.shared.applySummaryUpdate(update, for: id) }
-                }
-            })
-        processingStage[id] = nil
-        streamingSummaries[id] = nil
-        summaryProgress[id] = nil
-        // The durable transcript now supersedes the live one (if any was written).
-        store.archive.removeLiveTranscript(for: id)
-
-        // Merge only pipeline-owned fields onto the CURRENT meeting; nil means
-        // it was deleted mid-run — let it stay deleted.
-        guard var fresh = store.meeting(id: id) else { return }
-        fresh.state = outcome.state
-        fresh.notice = outcome.notice
-        if let speakers = outcome.speakers {
-            fresh.speakers = Self.merging(pipelineSpeakers: speakers, userSpeakers: fresh.speakers)
-        }
-        if let provider = outcome.summaryProvider { fresh.summaryProvider = provider }
-        if let title = outcome.generatedTitle, fresh.title == titleAtEntry {
-            fresh.title = title
-        }
-        store.upsert(fresh)
-        if fresh.state == .ready {
-            notifyReady(fresh)
-        }
+        await container.processMeeting.execute(meeting)
+        streamingSummaries[meeting.id] = nil
     }
 
-    /// Applies a progressive-summary signal from the pipeline. Deltas replace the
-    /// streamed text; `draftSaved`/`done` drop it so the Notes tab reads the saved file.
+    func retry(meetingID: UUID) async {
+        await container.retryMeeting.execute(meetingID: meetingID)
+    }
+
+    func regenerateSummary(meetingID: UUID, templateName: String? = nil) async {
+        await container.regenerateSummary.execute(meetingID: meetingID, templateName: templateName)
+    }
+
     private func applySummaryUpdate(_ update: ProcessingPipeline.SummaryUpdate, for id: UUID) {
         switch update {
         case .streaming(let text):
@@ -493,112 +257,19 @@ final class AppState: NSObject, ObservableObject {
             streamingSummaries[id] = text
         case .draftSaved:
             summaryProgress[id] = .improving
-            streamingSummaries[id] = nil // the saved draft now backs the view
+            streamingSummaries[id] = nil
         case .done:
             summaryProgress[id] = nil
             streamingSummaries[id] = nil
         }
     }
 
-    /// Pipeline speaker set wins structurally, but a rename the user made while
-    /// the pipeline was still running is kept.
-    private static func merging(pipelineSpeakers: [Speaker], userSpeakers: [Speaker]) -> [Speaker] {
-        pipelineSpeakers.map { pipelineSpeaker in
-            if let renamed = userSpeakers.first(where: { $0.id == pipelineSpeaker.id }) {
-                var kept = pipelineSpeaker
-                kept.name = renamed.name
-                return kept
-            }
-            return pipelineSpeaker
-        }
-    }
-
-    private static func appendOffset(meeting: Meeting, prior: [TranscriptSegment]) -> TimeInterval {
-        guard !prior.isEmpty else { return 0 }
-        return max(meeting.duration, prior.map(\.end).max() ?? 0)
-    }
-
-    private static func offsetSegments(
-        _ segments: [TranscriptSegment], by offset: TimeInterval
-    ) -> [TranscriptSegment] {
-        segments.map { seg in
-            var s = seg
-            s.start += offset
-            s.end += offset
-            return s
-        }
-    }
-
-    /// Failed meetings re-run the whole pipeline; ready ones just get a new
-    /// summary + title.
-    func retry(meetingID: UUID) async {
-        guard var meeting = store.meeting(id: meetingID) else { return }
-        if meeting.state == .failed || store.transcript(for: meetingID).isEmpty {
-            meeting.notice = nil
-            store.upsert(meeting)
-            await process(meeting)
-        } else {
-            await regenerateSummary(meetingID: meetingID)
-        }
-    }
-
-    /// Re-run summary+title only (transcript already exists), e.g. after the user
-    /// edited the transcript, switched template, or fixed an AI backend.
-    func regenerateSummary(meetingID: UUID, templateName: String? = nil) async {
-        guard var entry = store.meeting(id: meetingID) else { return }
-        if let templateName {
-            entry.templateName = templateName
-            store.upsert(entry)
-        }
-        processingStage[meetingID] = "Summarizing…"
-        summaryProgress[meetingID] = .streaming
-        streamingSummaries[meetingID] = ""
-        let segments = store.transcript(for: meetingID)
-        let text = TranscriptFormatter.plainText(segments, speakers: entry.speakers)
-        let userNotes = store.sideNotes(for: meetingID)
-        let titleAtEntry = entry.title
-        let outcome = await ProcessingPipeline.summarize(
-            meeting: entry, transcript: text, userNotes: userNotes
-        ) { delta in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated { AppState.shared.streamingSummaries[meetingID] = delta }
-            }
-        }
-
-        var generatedTitle: String?
-        if case .success(let summary, let provider) = outcome,
-           entry.calendarEventTitle == nil {
-            processingStage[meetingID] = "Naming the meeting…"
-            generatedTitle = await ProcessingPipeline.generateTitle(summary: summary, provider: provider)
-        }
-        processingStage[meetingID] = nil
-        streamingSummaries[meetingID] = nil
-        summaryProgress[meetingID] = nil
-
-        guard var fresh = store.meeting(id: meetingID) else { return }
-        switch outcome {
-        case .success(let summary, let provider):
-            store.saveSummary(summary, for: meetingID)
-            fresh.summaryProvider = provider
-            fresh.notice = nil
-            if let generatedTitle, fresh.title == titleAtEntry {
-                fresh.title = generatedTitle
-            }
-        case .failure(let why):
-            fresh.notice = why
-        }
-        store.upsert(fresh)
-    }
-
-    /// Meetings left mid-flight by a crash or quit get pushed back through the
-    /// pipeline. After a hard crash the m4a may be unreadable (AAC finalizes on
-    /// close) — those land in .failed with an honest notice rather than vanishing.
     private func finalizeOrphans() {
         for meeting in store.meetings where meeting.state == .recording || meeting.state == .processing {
             var m = meeting
             if m.duration == 0 {
                 m.duration = audioDuration(archive: store.archive, id: m.id)
-                store.upsert(m) // persist before process() re-fetches, or it's lost
+                store.upsert(m)
             }
             Task { await process(m) }
         }
@@ -613,79 +284,13 @@ final class AppState: NSObject, ObservableObject {
 
     // MARK: - Notifications
 
-    private func configureNotifications() {
-        guard Bundle.main.bundleIdentifier != nil else { return } // bare `swift run` has no bundle
-        let center = UNUserNotificationCenter.current()
-        center.delegate = self
-        // Meeting detection is surfaced by the floating card + chime + menu-bar glyph, not a
-        // notification (that only buried the prompt in Notification Center). The only notification
-        // left is "notes are ready", so we just need alert+sound authorization for that.
-        center.requestAuthorization(options: [.alert, .sound]) { granted, error in
-            self.log.info("notification auth granted=\(granted) error=\(error?.localizedDescription ?? "none", privacy: .public)")
-            Task { await self.refreshNotificationStatus() }
-        }
-        Task { await refreshNotificationStatus() }
-    }
-
     func refreshNotificationStatus() async {
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
-        notificationAuthStatus = settings.authorizationStatus
+        notificationAuthStatus = await container.notificationService.refreshAuthorizationStatus()
     }
 
-    /// Explicit request from onboarding / Settings. macOS shows the system dialog only while
-    /// the status is .notDetermined; once decided this just refreshes our cached status.
     func requestNotificationAuthorization() async {
-        let center = UNUserNotificationCenter.current()
-        let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
-        log.info("notification auth (from UI) granted=\(granted)")
+        await container.notificationService.requestAuthorization()
         await refreshNotificationStatus()
-    }
-
-    /// A short, Focus-proof audible cue for a detected meeting. NSSound plays through the
-    /// default output device regardless of notification permission or Do Not Disturb — the
-    /// audible half of the prompt (the floating card + menu-bar glyph are the visible half).
-    private func chime() {
-        guard Bundle.main.bundleIdentifier != nil else { return } // silent under bare `swift run`/tests
-        // Two meetings starting within a second shouldn't clobber the first still-playing
-        // NSSound (deallocating it mid-play) or stack into a double-ping — one clean chime.
-        if detectionChime?.isPlaying == true { return }
-        let sound = NSSound(named: NSSound.Name("Ping"))
-        detectionChime = sound
-        sound?.play()
-    }
-
-    private func notifyReady(_ meeting: Meeting) {
-        guard Bundle.main.bundleIdentifier != nil else { return }
-        let content = UNMutableNotificationContent()
-        content.title = meeting.title
-        content.body = "Your meeting notes are ready."
-        let request = UNNotificationRequest(
-            identifier: "ready-\(meeting.id)", content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
-    }
-}
-
-extension AppState: UNUserNotificationCenterDelegate {
-    nonisolated func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse
-    ) async {
-        // Only the "notes are ready" notification remains (detection uses the floating card now).
-        // Tapping it surfaces that meeting — it must never start a recording.
-        let identifier = response.notification.request.identifier
-        guard identifier.hasPrefix("ready-"),
-              let id = UUID(uuidString: String(identifier.dropFirst("ready-".count))) else { return }
-        await MainActor.run {
-            AppState.shared.openMeetingID = id
-            NSApp.activate()
-        }
-    }
-
-    nonisolated func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification
-    ) async -> UNNotificationPresentationOptions {
-        [.banner, .sound]
     }
 }
 

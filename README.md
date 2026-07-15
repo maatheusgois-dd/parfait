@@ -10,8 +10,8 @@
 An open-source, on-device meeting notetaker for macOS — a lightweight alternative to Granola.<br>
 It lives in your menu bar, notices when a meeting starts, records both sides of the call,<br>
 and writes a transcript with named speakers plus templated notes — without audio ever leaving your Mac.<br>
-Then it hands any meeting to <strong>Claude</strong> through a built-in MCP server — one call, your whole
-history, or the meeting happening <em>right now</em> — with nothing uploaded.
+Then it hands any meeting to <strong>your assistant</strong> — Apple Intelligence, Claude, or Codex — through a
+built-in MCP server: one call, your whole history, or the meeting happening <em>right now</em>, with nothing uploaded.
 </p>
 
 <p align="center">
@@ -37,19 +37,25 @@ history, or the meeting happening <em>right now</em> — with nothing uploaded.
   fixes the whole transcript.
 - **Summarizes on device** with Apple Intelligence (FoundationModels), following **your**
   editable markdown templates. Long meetings map-reduce through the model; meetings too big for
-  it route to your own Claude account.
+  it route to your own Claude or Codex account.
+- **Drafts notes live.** While a meeting is still recording, Parfait streams a first-pass summary
+  from the live transcript so notes appear within seconds — then refines them after the call ends.
 - **Everything is editable** — title, notes, transcript, speakers.
-- **Ask Claude live, mid-meeting.** A floating card shows the transcript as it happens; one button
-  opens Claude on the call in progress. Parfait exposes the running transcript through a
-  `get_live_transcript` MCP tool, so Claude can answer "what did I miss?" or "what should I ask
-  next?" — no pasting, and it rides over full-screen Zoom.
-- **Chat with one meeting, natively in Claude.** Your own question (or the "Ask about this meeting"
-  screen) opens Claude Desktop with that meeting loaded through Parfait's MCP connector — Claude
-  reads it itself; nothing is copied in.
-- **Chat with *all* your meetings.** "Ask your meetings" points Claude at your whole library the
-  same way. Because Parfait ships an MCP server over your meetings, once it's connected you can skip
-  the app entirely and just ask Claude — Code or Desktop — anytime. Claude can even regenerate a
-  meeting's notes against a different template, or edit them, through the same server.
+- **Calendar-aware.** With Calendar access, **Coming up** shows your agenda, pre-fills titles and
+  attendees when you record, and offers one-click join links (Zoom, Meet, Teams, Webex). A menu-bar
+  countdown can remind you before the next event.
+- **Folders for recurring meetings.** Group standups, 1:1s, and project syncs into folders. Assign
+  from the sidebar, drag-and-drop, or **Add to folder** on an upcoming event — future recordings
+  with the same calendar title land in the same folder automatically.
+- **Ask live, mid-meeting.** A floating card shows the transcript as it happens; one button opens
+  your assistant on the call in progress. Parfait exposes the running transcript through a
+  `get_live_transcript` MCP tool, so you can ask "what did I miss?" or "what should I ask next?"
+  — no pasting, and it rides over full-screen Zoom.
+- **Ask about one meeting or all of them.** The **Ask** screen answers in-app (Apple Intelligence)
+  or opens Claude / Codex with your meeting library loaded through Parfait's MCP connector — nothing
+  is copied in. Once connected, you can skip the app entirely and just ask your assistant anytime.
+- **Regenerate and edit notes through MCP.** Claude or Codex can regenerate a meeting's notes against
+  a different template, or edit them directly, through the same server.
 - **Publish** a beautiful self-contained page (notes + transcript) as a secret gist on your own
   GitHub (`gh`), with a rendered **notes.parfait.to** URL to share — Parfait's own CDN serving
   your gist back rendered, not a raw-file host — or preview/export the HTML locally with no
@@ -68,21 +74,24 @@ Parfait has no backend, no accounts, and no API keys. It composes things your Ma
 | Transcription | SpeechAnalyzer / SpeechTranscriber (macOS 26, on device) |
 | Speaker separation | FluidAudio CoreML diarization (on device) |
 | Summaries, titles | Apple Intelligence FoundationModels (on device) |
-| Long meetings, publishing | **Your own** Claude account via the `claude` CLI |
-| Chat (per-meeting and cross-meeting) | **Your own** Claude Desktop, via a deep link + Parfait's MCP connector |
+| Long meetings, publishing | **Your own** Claude or Codex account via the `claude` / `codex` CLI |
+| Ask (per-meeting, cross-meeting, live) | **Apple Intelligence** in-app, or **your own** Claude / Codex (CLI or desktop app) via Parfait's MCP connector |
+| Calendar | EventKit (on device) |
 | Publish target | **Your own** GitHub via `gh` (secret gist), served back rendered by **notes.parfait.to** (Parfait's own CDN in front of your gist), or a local browser preview / HTML export |
 
 ## Requirements
 
 - **macOS 26 (Tahoe)** on Apple Silicon
 - **Apple Intelligence enabled** (Settings → Apple Intelligence & Siri) for on-device summaries
-- **Required for chat:** [Claude Desktop](https://claude.ai/download), with the parfait MCP
-  connector added (Settings → Connect Claude) — the Chat and "Ask your meetings" screens open
-  a pre-filled prompt there
-- Optional: [Claude Code](https://claude.com/claude-code) (`claude` CLI, logged in) — unlocks
+  and in-app Ask
+- **Optional — Claude:** [Claude Desktop](https://claude.ai/download) or
+  [Claude Code](https://claude.com/claude-code) (`claude` CLI, logged in) — for cloud Ask and
   long-meeting summaries, billed to your own plan
-- Optional: [GitHub CLI](https://cli.github.com) (`gh auth login`) — to publish a shareable rendered
-  URL as a gist on your own account (without it, you can still preview and export the HTML locally)
+- **Optional — Codex:** [Codex](https://chatgpt.com/codex) (`codex` CLI, logged in) — same as
+  Claude, through your own account
+- **Optional:** [GitHub CLI](https://cli.github.com) (`gh auth login`) — to publish a shareable
+  rendered URL as a gist on your own account (without it, you can still preview and export the
+  HTML locally)
 
 ## Install
 
@@ -93,21 +102,33 @@ make install        # builds, assembles Parfait.app, copies to /Applications
 open /Applications/Parfait.app
 ```
 
-Look for the parfait glass in your menu bar. On first recording, macOS will ask for
-**Microphone** and **System Audio Recording** permission (the latter lives under
-Privacy & Security → Screen & System Audio Recording → "System Audio Recording Only").
+Look for the parfait glass in your menu bar. A first-run onboarding walkthrough covers permissions
+and optional setup. On first recording, macOS will ask for **Microphone** and **System Audio
+Recording** permission (the latter lives under Privacy & Security → Screen & System Audio
+Recording → "System Audio Recording Only").
 
 > **Signing note:** `make install` ad-hoc signs with a stable designated requirement, so TCC
 > permissions survive rebuilds. If you have an Apple Development certificate, prefer
 > `make install SIGN_ID="Apple Development: you@example.com (TEAMID)"`.
 
-## Connect Claude to your meeting library
+## Connect your assistant to your meeting library
+
+Pick your assistant in **Settings → Intelligence**. For Claude or Codex, add the Parfait MCP
+connector once — the app has one-click setup buttons, or run it yourself:
+
+### Claude Code
 
 ```bash
 claude mcp add parfait -s user -- "/Applications/Parfait.app/Contents/MacOS/Parfait" --mcp
 ```
 
-Then from any `claude` session (or Claude Desktop with the same server):
+### Codex
+
+```bash
+codex mcp add parfait -- "/Applications/Parfait.app/Contents/MacOS/Parfait" --mcp
+```
+
+Then from any session (or the desktop app with the same server):
 
 > "Search my meetings for when I last discussed hiring, and summarize what was decided."
 
@@ -134,9 +155,14 @@ Claude Desktop reads MCP servers from a config file, not a CLI command. Open (or
 }
 ```
 
-Restart Claude Desktop after saving. Settings → "Connect Claude to your meetings" in the app
-has a "Copy JSON" button that fills in your actual install path, and a "Reveal in Finder" button
-that jumps straight to the config file.
+Restart Claude Desktop after saving. Settings → Intelligence has "Add to Claude Code" and
+"Add to Claude Desktop" buttons, plus "Copy JSON" and "Reveal in Finder" for manual setup.
+
+### Codex
+
+Codex stores MCP servers in `~/.codex/config.toml`. Settings → Intelligence has an "Add with
+Codex" button, or run the `codex mcp add` command above. Use `$parfait` (not `@`) to attach
+the connector in Codex prompts.
 
 ## Templates
 
@@ -151,9 +177,9 @@ model; prose under a heading tells it what belongs there. Placeholders: `{{title
 - Audio, transcripts, and notes never leave your Mac by default.
 - The only network calls Parfait itself makes: one-time model downloads (Apple speech assets via
   the OS; the diarization model from Hugging Face).
-- Anything involving Claude or GitHub happens through **your** already-authenticated CLIs, at
-  your explicit request (chat, publish, or when a meeting exceeds the on-device model), on your
-  own accounts.
+- Anything involving Claude, Codex, or GitHub happens through **your** already-authenticated
+  CLIs, at your explicit request (chat, publish, or when a meeting exceeds the on-device model),
+  on your own accounts.
 - Publishing is always an explicit action. "Secret" gists are unlisted (on your own account,
   deletable) — anyone with the link can view the page; the browser preview and HTML export never
   leave your Mac. Deleting the gist stops new visits, but the rendered link is cached at the
@@ -163,7 +189,7 @@ model; prose under a heading tells it what belongs there. Placeholders: `{{title
 
 ```bash
 swift build          # debug build
-swift test           # 102 unit tests (store, labeling, formatting, templates, MCP, HTML, live transcription, Claude deep-links, CLI args)
+swift test           # 160 unit tests (store, folders, labeling, formatting, templates, MCP, HTML, live transcription, calendar, Claude/Codex deep-links, CLI args)
 make app             # assemble dist/Parfait.app
 make icon            # regenerate the icon from scripts/MakeIcon.swift
 ```
@@ -174,13 +200,17 @@ in [docs/TESTING.md](docs/TESTING.md). Architecture and design decisions live in
 
 ```
 Sources/Parfait/
+  Domain/          Protocols (repositories, services) + use cases (SRP, testable business logic)
+  Data/            Repository adapters + service implementations (file, EventKit, audio, AI)
+  Presentation/    ViewModels (MVVM) + Views (SwiftUI)
   Audio/           MeetingDetector · MicRecorder · SystemAudioTap · RecordingSession
-  Transcription/   Transcriber (SpeechAnalyzer) · Diarizer (FluidAudio) · SpeakerLabeler
-  Intelligence/    AppleSummarizer · ClaudeCLI · ClaudeDesktop · CalendarMatcher · TemplateStore
-  Store/           Meeting models · file-backed archive
-  MCP/             stdio MCP server (same binary, --mcp)
+  Transcription/   Transcriber · Diarizer · SpeakerLabeler
+  Intelligence/    AppleSummarizer · ClaudeCLI · CodexCLI · TemplateStore
+  Calendar/        CalendarStore · UpcomingMeetings · ConferenceJoiner
+  Store/           Domain models · MeetingArchive · folders
+  MCP/             stdio MCP server (--mcp)
   Publish/         HTMLExporter · GitHubGist
-  App/ UI/         AppState · pipeline · SwiftUI menu bar + windows
+  App/             DependencyContainer · AppState (coordinator) · ProcessingPipeline
 ```
 
 ## Acknowledgements

@@ -18,7 +18,7 @@ struct MeetingDetailView: View {
     enum Tab: String, CaseIterable {
         case notes = "Notes"
         case transcript = "Transcript"
-        case ask = "Ask Claude"
+        case ask = "Ask AI"
     }
 
     enum PublishState: Equatable {

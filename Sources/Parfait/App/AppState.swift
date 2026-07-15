@@ -82,7 +82,10 @@ final class AppState: NSObject, ObservableObject {
     func bootstrap() {
         configureNotifications()
         finalizeOrphans()
-        Task.detached { _ = ClaudeCLI.resolveBlocking() } // warm the CLI probe off-main
+        Task.detached {
+            _ = ClaudeCLI.resolveBlocking()
+            _ = CodexCLI.resolveBlocking()
+        } // warm CLI probes off-main
         // Clear a "System Audio Recording" indicator left stuck by a previously hard-killed
         // process. Off-main (coreaudiod IPC can stall at launch), but gated BEFORE detection
         // starts so the name-based sweep can never race a live tap of ours and destroy it.

@@ -12,7 +12,26 @@ enum SettingsKey {
     static let autoStopRecording = "autoStopRecording"      // stop ~8s after the meeting app releases the mic
     static let didCompleteOnboarding = "didCompleteOnboarding" // first-run walkthrough finished
     static let systemAudioConfirmed = "systemAudioConfirmed"   // tap has captured real (non-silent) audio at least once
-    static let preferClaudeSummaries = "preferClaudeSummaries" // when Claude is available, use it for summaries first (vs. Apple-first)
+    static let preferClaudeSummaries = "preferClaudeSummaries" // prefer cloud AI for summaries first (vs. Apple-first)
+    static let preferredAIProvider = "preferredAIProvider"     // apple | claude | codex
+}
+
+enum AIProvider: String, CaseIterable, Identifiable, Hashable {
+    case apple
+    case claude
+    case codex
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .apple: "Apple Intelligence"
+        case .claude: "Claude"
+        case .codex: "Codex"
+        }
+    }
+
+    var isCloud: Bool { self != .apple }
 }
 
 enum AppSettings {
@@ -29,7 +48,8 @@ enum AppSettings {
             SettingsKey.autoStopRecording: true,
             SettingsKey.didCompleteOnboarding: false,
             SettingsKey.systemAudioConfirmed: false,
-            SettingsKey.preferClaudeSummaries: true,
+            SettingsKey.preferClaudeSummaries: false,
+            SettingsKey.preferredAIProvider: AIProvider.apple.rawValue,
         ])
     }
 
@@ -56,4 +76,7 @@ enum AppSettings {
     static var systemAudioConfirmed: Bool { defaults.bool(forKey: SettingsKey.systemAudioConfirmed) }
     static func markSystemAudioConfirmed() { defaults.set(true, forKey: SettingsKey.systemAudioConfirmed) }
     static var preferClaudeSummaries: Bool { defaults.bool(forKey: SettingsKey.preferClaudeSummaries) }
+    static var preferredAIProvider: AIProvider {
+        AIProvider(rawValue: defaults.string(forKey: SettingsKey.preferredAIProvider) ?? "") ?? .apple
+    }
 }

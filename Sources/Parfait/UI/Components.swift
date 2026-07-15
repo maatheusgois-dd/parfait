@@ -54,16 +54,26 @@ struct StateBadge: View {
     }
 }
 
-/// Only flags the exception: output produced by Claude (your account, off-device).
-/// On-device is the default and needs no chip.
+/// Flags which engine wrote the summary: Apple Intelligence, Claude, or Codex.
 struct ProviderBadge: View {
     let provider: String?
 
     var body: some View {
         if provider == "claude" {
-            Label("Claude", systemImage: "sparkles")
-                .badgeStyle(Theme.blueberry)
+            badgeLabel("Claude", icon: "sparkles", color: Theme.blueberry)
+        } else if provider == "codex" {
+            badgeLabel("Codex", icon: "sparkles", color: Theme.raspberry)
+        } else if provider == "apple" {
+            badgeLabel("Apple Intelligence", icon: "apple.intelligence", color: Theme.mint)
         }
+    }
+
+    private func badgeLabel(_ title: String, icon: String, color: Color) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+            Text(title)
+        }
+        .badgeStyle(color)
     }
 }
 

@@ -192,9 +192,9 @@ enum ProcessingPipeline {
         return signature(a) == signature(b)
     }
 
-    /// On-device first; the user's Claude account when the local model can't. When
-    /// `onDelta` is given, the chosen engine streams its markdown as it's generated
-    /// (`onDelta` receives the growing text); otherwise it runs buffered.
+    /// Routes to the user's chosen assistant first. Apple Intelligence is the default
+    /// on-device path; Claude/Codex run first when selected. When `onDelta` is given,
+    /// the chosen engine streams its markdown as it's generated.
     static func summarize(
         meeting: Meeting,
         transcript: String,
@@ -231,6 +231,7 @@ enum ProcessingPipeline {
             return summary.map { .success($0, provider: "apple") }
         }
         var claudeError: String?
+        var codexError: String?
         func claude() async -> SummaryOutcome? {
             guard ClaudeCLI.isInstalled else { return nil }
             do {
@@ -252,39 +253,114 @@ enum ProcessingPipeline {
                 return .success(result.text, provider: "claude")
             } catch {
                 claudeError = error.localizedDescription
+                AIDebugLog.log("claude: \(error.localizedDescription)")
+                return nil
+            }
+        }
+        func codex() async -> SummaryOutcome? {
+            guard CodexCLI.isReady else { return nil }
+            do {
+                let result = try await CodexCLI.run(
+                    prompt: prompt, stdin: transcript, systemPrompt: systemPrompt)
+                if let onDelta { onDelta(result.text) }
+                return .success(result.text, provider: "codex")
+            } catch {
+                codexError = error.localizedDescription
+                AIDebugLog.log("codex: \(error.localizedDescription)")
                 return nil
             }
         }
 
-        // Claude first when the user prefers it and it's available (its summaries are
-        // higher quality); otherwise on-device first with Claude as the long-meeting
-        // fallback. Either way, the second engine covers the first one's failure.
-        let order: [() async -> SummaryOutcome?] =
-            AppSettings.preferClaudeSummaries && ClaudeCLI.isInstalled
-            ? [claude, apple]
-            : [apple, claude]
-        for engine in order {
-            if let outcome = await engine() { return outcome }
+        let preferred = AppSettings.preferredAIProvider
+        let cloudPrimary: () async -> SummaryOutcome? = preferred == .codex ? codex : claude
+        let cloudFallback: () async -> SummaryOutcome? = preferred == .codex ? claude : codex
+        let cloudReady = preferred == .codex
+            ? CodexCLI.isReady
+            : preferred == .claude
+                ? ClaudeCLI.isInstalled && ClaudeCLI.isLoggedIn()
+                : false
+
+        let order: [() async -> SummaryOutcome?]
+        let orderNames: [String]
+        switch preferred {
+        case .apple:
+            order = [apple, claude, codex]
+            orderNames = ["Apple Intelligence", "Claude", "Codex"]
+        case .claude, .codex:
+            let primary = preferred.displayName
+            let fallback = preferred == .codex ? "Claude" : "Codex"
+            if cloudReady {
+                if AppSettings.preferClaudeSummaries {
+                    order = [cloudPrimary, cloudFallback]
+                    orderNames = [primary, fallback]
+                } else {
+                    order = [cloudPrimary, apple, cloudFallback]
+                    orderNames = [primary, "Apple Intelligence", fallback]
+                }
+            } else {
+                order = [apple, cloudPrimary, cloudFallback]
+                orderNames = ["Apple Intelligence", primary, fallback]
+            }
+        }
+        let modeLabel = preferred.isCloud && cloudReady
+            ? (AppSettings.preferClaudeSummaries ? " · cloud-only" : " · cloud-first")
+            : ""
+        AIDebugLog.log(
+            "summarize: \(transcript.count) chars · preferred \(preferred.displayName)\(modeLabel)"
+                + " · order: \(orderNames.joined(separator: " → "))")
+
+        for (name, engine) in zip(orderNames, order) {
+            AIDebugLog.log("summarize: trying \(name)…")
+            if let outcome = await engine() {
+                if case .success(_, let provider) = outcome {
+                    AIDebugLog.log("summarize: succeeded via \(provider)")
+                }
+                return outcome
+            }
+            AIDebugLog.log("summarize: \(name) unavailable or failed")
         }
 
+        if preferred == .apple {
+            let reason = AppleSummarizer.unavailableReason ?? "Apple Intelligence is unavailable"
+            AIDebugLog.log("summarize: failed — \(reason)")
+            return .failure("\(reason) — transcript saved, summary skipped. Enable Apple Intelligence and press Regenerate.")
+        }
+        if preferred == .codex, let codexError {
+            AIDebugLog.log("summarize: failed via Codex — \(codexError)")
+            return .failure("Summary failed via Codex: \(codexError)")
+        }
         if let claudeError {
+            AIDebugLog.log("summarize: failed via Claude — \(claudeError)")
             return .failure("Summary failed via Claude: \(claudeError)")
         }
+        let cloudName = preferred.displayName
         let reason = AppleSummarizer.unavailableReason ?? "Apple Intelligence is unavailable"
-        return .failure("\(reason), and Claude Code isn't installed — transcript saved, summary skipped. Fix either one and press Regenerate.")
+        AIDebugLog.log("summarize: failed — \(reason); \(cloudName) not ready")
+        return .failure("\(reason), and \(cloudName) isn't ready — transcript saved, summary skipped. Fix either one and press Regenerate.")
     }
 
     static func generateTitle(summary: String, provider: String) async -> String? {
+        AIDebugLog.log("title: generating via \(provider)")
         if provider == "apple", let title = try? await AppleSummarizer.generateTitle(fromSummary: summary) {
+            AIDebugLog.log("title: Apple Intelligence → \"\(title)\"")
             return cleaned(title)
+        }
+        if provider == "codex", CodexCLI.isInstalled,
+           let result = try? await CodexCLI.run(
+               prompt: "Reply with only a specific 3–8 word title for the meeting with these notes, no quotes:\n\n\(String(summary.prefix(2000)))"
+           ) {
+            AIDebugLog.log("title: Codex → \"\(result.text)\"")
+            return cleaned(result.text)
         }
         if ClaudeCLI.isInstalled,
            let result = try? await ClaudeCLI.run(
                prompt: "Reply with only a specific 3–8 word title for the meeting with these notes, no quotes:\n\n\(String(summary.prefix(2000)))",
                model: "haiku"
            ) {
+            AIDebugLog.log("title: Claude → \"\(result.text)\"")
             return cleaned(result.text)
         }
+        AIDebugLog.log("title: no engine produced a title")
         return nil
     }
 

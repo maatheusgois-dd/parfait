@@ -40,7 +40,7 @@ struct Meeting: Codable, Identifiable, Equatable, Sendable {
     /// Human-readable reason when state == .failed, or a non-fatal warning otherwise.
     var notice: String?
     var publishedURL: String?
-    /// Which engine produced the summary: "apple" or "claude".
+    /// Which engine produced the summary: "apple", "claude", or "codex".
     var summaryProvider: String?
 }
 

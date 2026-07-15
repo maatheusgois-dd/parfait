@@ -4,13 +4,21 @@ struct MeetingLauncherView: View {
     let meeting: Meeting
 
     var body: some View {
-        ClaudeLauncherView(
+        AILauncherView(
             title: "Ask about this meeting",
-            subtitle: "Ask Claude about this meeting through the parfait connector.",
+            subtitle: "Ask about this meeting through the parfait connector.",
             suggestions: [],
             promptBuilder: { question in
-                ClaudeDesktopPrompt.meeting(
-                    id: meeting.id, title: meeting.title, question: question)
+                switch AppSettings.preferredAIProvider {
+                case .apple:
+                    ""
+                case .claude:
+                    ClaudeDesktopPrompt.meeting(
+                        id: meeting.id, title: meeting.title, question: question)
+                case .codex:
+                    CodexPrompt.meeting(
+                        id: meeting.id, title: meeting.title, question: question)
+                }
             }
         )
     }
@@ -18,27 +26,33 @@ struct MeetingLauncherView: View {
 
 struct LibraryLauncherView: View {
     var body: some View {
-        ClaudeLauncherView(
+        AILauncherView(
             title: "Ask across every meeting",
-            subtitle: "Ask Claude anything across your whole meeting library, through the parfait connector.",
+            subtitle: "Ask anything across your whole meeting library, through the parfait connector.",
             suggestions: [],
-            promptBuilder: { question in ClaudeDesktopPrompt.library(question: question) }
+            promptBuilder: { question in
+                switch AppSettings.preferredAIProvider {
+                case .apple:
+                    ""
+                case .claude: ClaudeDesktopPrompt.library(question: question)
+                case .codex: CodexPrompt.library(question: question)
+                }
+            }
         )
         .navigationTitle("Ask your meetings")
     }
 }
 
-/// Shared launcher UI: suggestion chips + compose field + "Open in Claude"
-/// button. Claude Desktop does the actual conversing now — this view's only
-/// job is turning intent into a good deep-link prompt.
-struct ClaudeLauncherView: View {
+/// Shared launcher: compose field + Ask AI button for the user's chosen assistant.
+struct AILauncherView: View {
     let title: String
     let subtitle: String
     let suggestions: [String]
     let promptBuilder: (String) -> String
 
+    @AppStorage(SettingsKey.preferredAIProvider) private var preferredAIProvider: AIProvider = .apple
     @State private var input = ""
-    @State private var installed = ClaudeDesktop.isInstalled
+    @State private var available = AIAsk.isAvailable
     @State private var launchFailed = false
     @Environment(\.colorScheme) private var scheme
 
@@ -56,27 +70,31 @@ struct ClaudeLauncherView: View {
                             SuggestionChip(text: suggestion)
                         }
                         .buttonStyle(.plain)
-                        .disabled(!installed)
-                        .opacity(installed ? 1 : 0.4)
+                        .disabled(!available)
+                        .opacity(available ? 1 : 0.4)
                     }
                 }
             }
 
             composeBar
 
-            if installed {
-                Text("Tip: once the parfait connector is set up, you can just open Claude (Code or Desktop) and ask about your meetings anytime — you don't have to start here.")
+            if available {
+                Text("Tip: once the parfait connector is set up, you can open \(preferredAIProvider.displayName) and ask about your meetings anytime — you don't have to start here. Use $parfait to attach the connector.")
+                    .font(.parfait(11))
+                    .foregroundStyle(.secondary)
+            } else if preferredAIProvider == .apple {
+                Text("Apple Intelligence handles summaries on-device. Pick Claude or Codex in Settings → Intelligence to ask about your meetings in chat.")
                     .font(.parfait(11))
                     .foregroundStyle(.secondary)
             }
 
             if launchFailed {
-                Label("Couldn't open Claude Desktop.", systemImage: "exclamationmark.triangle")
+                Label("Couldn't open \(preferredAIProvider.displayName).", systemImage: "exclamationmark.triangle")
                     .font(.parfait(11))
                     .foregroundStyle(.orange)
             }
 
-            if !installed {
+            if !available {
                 unavailableNotice
             }
 
@@ -86,7 +104,9 @@ struct ClaudeLauncherView: View {
         .frame(maxWidth: 640, alignment: .leading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.surface(scheme))
-        .onAppear { installed = ClaudeDesktop.isInstalled }
+        .id(preferredAIProvider)
+        .onAppear { available = AIAsk.isAvailable }
+        .onChange(of: preferredAIProvider) { available = AIAsk.isAvailable }
     }
 
     private var composeBar: some View {
@@ -95,38 +115,67 @@ struct ClaudeLauncherView: View {
                 .textFieldStyle(.plain)
                 .font(.parfait(13))
                 .lineLimit(1...4)
-                .disabled(!installed)
+                .disabled(!available)
                 .onSubmit(launchTyped)
                 .padding(12)
                 .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: 10))
             Button(action: launchTyped) {
-                Label("Open in Claude", systemImage: "arrow.up.forward.app")
+                Label("Ask AI", systemImage: "arrow.up.forward.app")
                     .font(.parfait(13, .semibold))
             }
             .buttonStyle(.borderedProminent)
             .tint(Theme.raspberry)
-            .disabled(!installed || input.trimmingCharacters(in: .whitespaces).isEmpty)
+            .disabled(!available || input.trimmingCharacters(in: .whitespaces).isEmpty)
         }
     }
 
+    @ViewBuilder
     private var unavailableNotice: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("Claude Desktop isn't installed", systemImage: "exclamationmark.triangle")
-                .font(.parfait(12, .semibold))
-                .foregroundStyle(.orange)
-            HStack(spacing: 4) {
-                Link("Get Claude Desktop", destination: URL(string: "https://claude.ai/download")!)
-                Text("— then add the parfait connector in Settings → Connect Claude.")
+        switch preferredAIProvider {
+        case .apple:
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Chat needs Claude or Codex", systemImage: "info.circle")
+                    .font(.parfait(12, .semibold))
+                    .foregroundStyle(.secondary)
+                Text("Summaries already use Apple Intelligence on this Mac. Switch assistant in Settings → Intelligence to ask about meetings.")
+                    .font(.parfait(11))
                     .foregroundStyle(.secondary)
             }
-            .font(.parfait(11))
+            .padding(12)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+        case .claude:
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Claude Desktop isn't installed", systemImage: "exclamationmark.triangle")
+                    .font(.parfait(12, .semibold))
+                    .foregroundStyle(.orange)
+                HStack(spacing: 4) {
+                    Link("Get Claude Desktop", destination: URL(string: "https://claude.ai/download")!)
+                    Text("— then add the parfait connector in Settings.")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.parfait(11))
+            }
+            .padding(12)
+            .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
+        case .codex:
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Codex isn't installed", systemImage: "exclamationmark.triangle")
+                    .font(.parfait(12, .semibold))
+                    .foregroundStyle(.orange)
+                HStack(spacing: 4) {
+                    Link("Get Codex", destination: URL(string: "https://chatgpt.com/codex")!)
+                    Text("— then add the parfait connector in Settings.")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.parfait(11))
+            }
+            .padding(12)
+            .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
         }
-        .padding(12)
-        .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func launch(_ question: String) {
-        launchFailed = !ClaudeDesktop.openNewChat(prompt: promptBuilder(question))
+        launchFailed = !AIAsk.open(prompt: promptBuilder(question))
         if !launchFailed { input = "" }
     }
 
@@ -137,9 +186,6 @@ struct ClaudeLauncherView: View {
     }
 }
 
-/// Like Chip, but sized for full sentences instead of short labels (attendee
-/// names, "Optional") — Chip's fixed 160pt width + tail-truncation would clip
-/// suggestions like "Summarize everything we've said about the Q3 launch".
 private struct SuggestionChip: View {
     let text: String
     var body: some View {

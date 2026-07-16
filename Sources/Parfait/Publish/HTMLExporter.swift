@@ -201,8 +201,11 @@ enum HTMLExporter {
 
     private static func inline(_ s: String) -> String {
         var out = escape(s)
-        out = out.replacing(#/\*\*([^*]+)\*\*/#) { "<strong>\($0.1)</strong>" }
-        out = out.replacing(#/\*([^*]+)\*/#) { "<em>\($0.1)</em>" }
+        // CommonMark flanking: emphasis delimiters must touch non-whitespace on the
+        // inner side. `* text *` (spaced) is not italic — it's a literal asterisk.
+        // `\S[^*]*\S` covers 2+ char runs; `\S` covers single-char emphasis.
+        out = out.replacing(#/\*\*(\S[^*]*\S|\S)\*\*/#) { "<strong>\($0.1)</strong>" }
+        out = out.replacing(#/\*(\S[^*]*\S|\S)\*/#) { "<em>\($0.1)</em>" }
         return out
     }
 

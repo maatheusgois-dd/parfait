@@ -20,6 +20,8 @@ enum ParfaitConsoleLog {
     private static let notification = Logger(subsystem: "io.github.conrad-vanl.Parfait", category: "notification")
     private static let processing = Logger(subsystem: "io.github.conrad-vanl.Parfait", category: "processing")
     private static let intelligence = Logger(subsystem: "io.github.conrad-vanl.Parfait", category: "intelligence")
+    private static let nemotron = Logger(subsystem: "io.github.conrad-vanl.Parfait", category: "nemotron")
+    private static let soniqo = Logger(subsystem: "io.github.conrad-vanl.Parfait", category: "soniqo")
 
     static func zoom(_ message: String) { emit(zoom, "zoom", message) }
     static func recording(_ message: String) { emit(recording, "recording", message) }
@@ -36,6 +38,8 @@ enum ParfaitConsoleLog {
     static func notification(_ message: String) { emit(notification, "notification", message) }
     static func processing(_ message: String) { emit(processing, "processing", message) }
     static func intelligence(_ message: String) { emit(intelligence, "intelligence", message) }
+    static func nemotron(_ message: String) { emit(nemotron, "nemotron", message) }
+    static func soniqo(_ message: String) { emit(soniqo, "soniqo", message) }
 
     private static func emit(_ logger: Logger, _ category: String, _ message: String) {
         logger.info("\(message, privacy: .public)")

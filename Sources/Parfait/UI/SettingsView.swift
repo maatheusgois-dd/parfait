@@ -12,6 +12,8 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
             IntelligenceSettings()
                 .tabItem { Label("Intelligence", systemImage: "sparkles") }
+            TranscriptionSettings()
+                .tabItem { Label("Transcription", systemImage: "waveform") }
             TemplateSettings()
                 .tabItem { Label("Templates", systemImage: "doc.text") }
             CalendarSettings()

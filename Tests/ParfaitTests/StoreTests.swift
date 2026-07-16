@@ -96,6 +96,36 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(hits[1].excerpts[0].contains("Me @ 0:00"))
     }
 
+    func testSearchSkipsTranscriptDecodeForNonMatchingMeetings() throws {
+        // A meeting whose transcript can't contain the query word should still
+        // be scored correctly (0 from transcript) and skipped at the JSON-decode
+        // level — the pre-filter must not suppress title/summary/attendee hits.
+        let m = makeMeeting(title: "Sprint planning")
+        try archive.save(m)
+        try archive.saveTranscript(
+            [TranscriptSegment(speakerID: "me", start: 0, end: 1, text: "Completely unrelated content about weather.")],
+            for: m.id
+        )
+        // Title match only — transcript pre-filter skips the decode, score comes from title.
+        let hits = archive.search("sprint")
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertEqual(hits[0].meeting.id, m.id)
+        XCTAssertEqual(hits[0].score, 10) // title only, no transcript contribution
+    }
+
+    func testSearchPreFilterStillFindsTranscriptMatches() throws {
+        // Verify the pre-filter doesn't false-negative on real transcript hits.
+        let m = makeMeeting(title: "Random title")
+        try archive.save(m)
+        try archive.saveTranscript(
+            [TranscriptSegment(speakerID: "me", start: 10, end: 12, text: "We need to discuss the migration plan.")],
+            for: m.id
+        )
+        let hits = archive.search("migration")
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertTrue(hits[0].excerpts.contains(where: { $0.contains("migration") }))
+    }
+
     func testSearchNoResults() {
         XCTAssertTrue(archive.search("zebra").isEmpty)
         XCTAssertTrue(archive.search("   ").isEmpty)

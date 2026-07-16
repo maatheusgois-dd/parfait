@@ -28,8 +28,20 @@ final class LiveTranscriber: @unchecked Sendable {
         Speaker(id: othersSpeakerID, name: "Others"),
     ]
 
+    /// Display name for the local speaker ("You"), overridden with the Zoom
+    /// roster's local participant name or NSFullUserName when available.
+    static var localSpeakerName: String = "You"
+
+    /// Display name for the remote speaker ("Others"), overridden with the
+    /// single remote Zoom participant when the roster has exactly one non-local name.
+    static var remoteSpeakerName: String = "Others"
+
     static func name(for speakerID: String) -> String {
-        speakers.first { $0.id == speakerID }?.name ?? speakerID
+        switch speakerID {
+        case youSpeakerID: return localSpeakerName
+        case othersSpeakerID: return remoteSpeakerName
+        default: return speakerID
+        }
     }
 
     /// A run of consecutive same-speaker segments, for rendering. `id` is the
@@ -83,6 +95,11 @@ final class LiveTranscriber: @unchecked Sendable {
     /// Returns the current system-tap peak when available (headphone bleed mode).
     var systemPeakProvider: (() -> Float)?
 
+    /// When set, resolves an elapsed timestamp to a platform (Zoom) speaker name.
+    /// System-audio segments are attributed to this name instead of "them" when
+    /// the platform reports an active speaker at that time.
+    var platformSpeakerResolver: (@Sendable (TimeInterval) -> String?)?
+
     init(startDate: Date, timeOffset: TimeInterval = 0) {
         self.startDate = startDate
         self.timeOffset = timeOffset
@@ -135,7 +152,7 @@ final class LiveTranscriber: @unchecked Sendable {
     static func formattedVolatile(_ volatile: [String: String]) -> String {
         speakers.compactMap { sp -> String? in
             guard let text = volatile[sp.id], !text.isEmpty else { return nil }
-            return "\(sp.name): \(text)"
+            return "\(name(for: sp.id)): \(text)"
         }.joined(separator: "\n")
     }
 
@@ -232,13 +249,24 @@ final class LiveTranscriber: @unchecked Sendable {
     private func handle(_ result: SpeechTranscriber.Result, speakerID: String) {
         let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
         let elapsed = max(0, Date().timeIntervalSince(startDate)) + timeOffset
+
+        // Resolve the platform (Zoom) speaker OUTSIDE the lock — the AX scan can
+        // take 100ms+, and holding the lock blocks the audio buffer feeds. Only
+        // system-audio segments need platform attribution (or mic in bleed mode).
+        let systemPeak = systemPeakProvider?() ?? 0
+        let needsPlatform = (speakerID == Self.othersSpeakerID)
+            || (headphoneBleedMode && systemPeak >= Self.remoteSpeechPeakThreshold)
+        let platformSpeaker: String? = needsPlatform
+            ? platformSpeakerResolver?(elapsed)
+            : nil
+
         lock.lock()
         let bleedMode = headphoneBleedMode
-        let systemPeak = systemPeakProvider?() ?? 0
         var effectiveSpeaker = speakerID
         if bleedMode, speakerID == Self.youSpeakerID, systemPeak >= Self.remoteSpeechPeakThreshold {
             effectiveSpeaker = Self.othersSpeakerID
         }
+        let segSpeakerID = platformSpeaker ?? effectiveSpeaker
         if result.isFinal {
             volatile[effectiveSpeaker] = nil
             if speakerID == Self.youSpeakerID, effectiveSpeaker != speakerID {
@@ -263,7 +291,7 @@ final class LiveTranscriber: @unchecked Sendable {
                     }
                 }
                 let seg = TranscriptSegment(
-                    speakerID: effectiveSpeaker, start: elapsed, end: elapsed, text: text)
+                    speakerID: segSpeakerID, start: elapsed, end: elapsed, text: text)
                 var idx = finalized.count
                 while idx > 0, finalized[idx - 1].start > seg.start { idx -= 1 }
                 finalized.insert(seg, at: idx)
@@ -276,12 +304,15 @@ final class LiveTranscriber: @unchecked Sendable {
                     Self.removeEchoedMicSegments(
                         around: seg.start, in: &finalized, window: Self.liveEchoWindow)
                 }
-                if effectiveSpeaker != speakerID {
+                if let platformSpeaker, platformSpeaker != effectiveSpeaker {
+                    ParfaitConsoleLog.live(
+                        "platform→\(platformSpeaker) @ \(String(format: "%.1f", elapsed))s: \(text.prefix(80))")
+                } else if effectiveSpeaker != speakerID {
                     ParfaitConsoleLog.live(
                         "reattributed mic→them @ \(String(format: "%.1f", elapsed))s systemPeak=\(String(format: "%.4f", systemPeak)): \(text.prefix(80))")
                 } else {
                     ParfaitConsoleLog.live(
-                        "final \(effectiveSpeaker) @ \(String(format: "%.1f", elapsed))s (\(finalized.count) segments): \(text.prefix(80))")
+                        "final \(segSpeakerID) @ \(String(format: "%.1f", elapsed))s (\(finalized.count) segments): \(text.prefix(80))")
                 }
             }
         } else {

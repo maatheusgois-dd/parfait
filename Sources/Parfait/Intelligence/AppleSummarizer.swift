@@ -157,7 +157,7 @@ enum AppleSummarizer {
         SystemLanguageModel(guardrails: .permissiveContentTransformations)
     }
 
-    private static var inputBudgetChars: Int {
+    static var inputBudgetChars: Int {
         // On-device model context is 4096 tokens (TN3193). contextSize is only in macOS 26.4+ SDK.
         Int(Double(4096) * 0.55 * 3.5)
     }
@@ -222,19 +222,59 @@ enum AppleSummarizer {
         }
     }
 
-    private static func chunk(_ text: String) -> [String] {
+    static func chunk(_ text: String) -> [String] {
         let maxChars = inputBudgetChars
         var chunks: [String] = []
         var current = ""
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            if current.count + line.count + 1 > maxChars, !current.isEmpty {
-                chunks.append(current)
-                current = ""
+            // A single line longer than the budget (no line breaks to split on)
+            // would overflow the context window. Hard-split it at word boundaries
+            // so map-reduce still produces sub-budget chunks.
+            for piece in Self.splitLong(String(line), maxChars: maxChars) {
+                if current.count + piece.count + 1 > maxChars, !current.isEmpty {
+                    chunks.append(current)
+                    current = ""
+                }
+                current += (current.isEmpty ? "" : "\n") + piece
             }
-            current += (current.isEmpty ? "" : "\n") + line
         }
         if !current.isEmpty { chunks.append(current) }
         return chunks
+    }
+
+    /// Splits an individual line into pieces no longer than `maxChars`,
+    /// breaking at word boundaries when possible. A word longer than the
+    /// budget is split mid-word as a last resort.
+    static func splitLong(_ line: String, maxChars: Int) -> [String] {
+        guard line.count > maxChars else { return [line] }
+        var pieces: [String] = []
+        var current = ""
+        for word in line.split(separator: " ", omittingEmptySubsequences: false) {
+            if current.count + word.count + 1 > maxChars, !current.isEmpty {
+                pieces.append(current)
+                current = ""
+            }
+            if word.count > maxChars {
+                // A single word longer than the budget — split it hard.
+                var remaining = String(word)
+                while remaining.count > maxChars {
+                    let end = remaining.index(remaining.startIndex, offsetBy: maxChars)
+                    pieces.append(String(remaining[..<end]))
+                    remaining = String(remaining[end...])
+                }
+                if !remaining.isEmpty {
+                    if current.count + remaining.count + 1 > maxChars, !current.isEmpty {
+                        pieces.append(current)
+                        current = ""
+                    }
+                    current += (current.isEmpty ? "" : " ") + remaining
+                }
+            } else {
+                current += (current.isEmpty ? "" : " ") + word
+            }
+        }
+        if !current.isEmpty { pieces.append(current) }
+        return pieces
     }
 
     private static func wrap(_ error: Error) -> Error {

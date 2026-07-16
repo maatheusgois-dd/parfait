@@ -21,6 +21,8 @@ final class RecordingSession: ObservableObject {
     @Published private(set) var volatileText: String = ""
     /// Display name of whoever Zoom marks as the active remote speaker, when known.
     @Published private(set) var activeRemoteSpeaker: String?
+    /// Zoom participant names captured at recording start, for the live UI.
+    @Published private(set) var liveRoster: [String] = []
     private(set) var micStarted = false
     private(set) var systemStarted = false
 
@@ -29,10 +31,11 @@ final class RecordingSession: ObservableObject {
     private let archive: MeetingArchive
     private var liveTranscriber: LiveTranscriber?
     private var zoomSpeakerTracker: ZoomSpeakerTracker?
+    private var activeObserver: NSObjectProtocol?
+    private var zoomRosterTimer: Timer?
+    private var systemSignalCheck: Task<Void, Never>?
     private var lastLivePersist = Date.distantPast
     private var ticker: Timer?
-    private var activeObserver: NSObjectProtocol?
-    private var systemSignalCheck: Task<Void, Never>?
 
     enum SessionError: LocalizedError {
         case nothingStarted(String)
@@ -74,6 +77,13 @@ final class RecordingSession: ObservableObject {
             Task { @MainActor in self?.applyLive(segments, volatile) }
         }
         liveTranscriber = live
+
+        // Set the local speaker's display name immediately from the macOS account
+        // holder. When the Zoom roster arrives, it's refined to the Zoom display name.
+        let full = NSFullUserName().trimmingCharacters(in: .whitespacesAndNewlines)
+        if !full.isEmpty {
+            LiveTranscriber.localSpeakerName = full
+        }
 
         mic.levelHandler = { [weak self] levels in
             Task { @MainActor in self?.micBarLevels = levels }
@@ -206,6 +216,11 @@ final class RecordingSession: ObservableObject {
         }
         zoomSpeakerTracker?.stop()
         zoomSpeakerTracker = nil
+        zoomRosterTimer?.invalidate()
+        zoomRosterTimer = nil
+        liveRoster = []
+        LiveTranscriber.localSpeakerName = "You"
+        LiveTranscriber.remoteSpeakerName = "Others"
         activeRemoteSpeaker = nil
         micBarLevels = Array(repeating: 0, count: 12)
         let micURL = archive.micURL(for: meetingID)
@@ -268,7 +283,63 @@ final class RecordingSession: ObservableObject {
             ParfaitConsoleLog.zoom("UI activeRemoteSpeaker=\(name ?? "nil")")
             self?.activeRemoteSpeaker = name
         }
+        // Poll the tracker's roster for the live UI (participant names).
+        let rosterTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let tracker = self.zoomSpeakerTracker else { return }
+                let roster = tracker.currentRoster()
+                if roster != self.liveRoster {
+                    self.liveRoster = roster
+                    ParfaitConsoleLog.zoom("live roster updated: [\(roster.joined(separator: ", "))]")
+                    self.updateLiveSpeakerNames(from: roster)
+                }
+            }
+        }
+        rosterTimer.tolerance = 0.5
+        zoomRosterTimer = rosterTimer
+        // Bridge: LiveTranscriber queries the Zoom tracker's timeline to attribute
+        // system-audio segments to the active speaker's name in real time.
+        if let live = liveTranscriber {
+            live.platformSpeakerResolver = { [weak tracker] t in
+                tracker?.speakerAt(t)
+            }
+            ParfaitConsoleLog.zoom("platformSpeakerResolver wired to LiveTranscriber")
+        }
         zoomSpeakerTracker = tracker
         tracker.start()
+
+        // Do an immediate roster scan so participant names appear right away,
+        // rather than waiting up to 2s for the first timer tick.
+        let initialRoster = tracker.currentRoster()
+        if !initialRoster.isEmpty {
+            liveRoster = initialRoster
+            updateLiveSpeakerNames(from: initialRoster)
+        }
+    }
+
+    /// Updates `LiveTranscriber.localSpeakerName` and `.remoteSpeakerName` from the
+    /// Zoom roster. The local participant is identified by matching NSFullUserName;
+    /// the remote name is the single non-local participant in a 1:1 call, or
+    /// "Others" when there are multiple remote participants (until the active-speaker
+    /// timeline can disambiguate them).
+    private func updateLiveSpeakerNames(from roster: [String]) {
+        let full = NSFullUserName().trimmingCharacters(in: .whitespacesAndNewlines)
+        let localName = roster.first(where: { ZoomActiveSpeakerReader.isLocalParticipant($0) })
+            ?? (full.isEmpty ? nil : full)
+        let remoteNames = roster.filter { !ZoomActiveSpeakerReader.isLocalParticipant($0) }
+
+        if let localName, !localName.isEmpty {
+            LiveTranscriber.localSpeakerName = localName
+            ParfaitConsoleLog.zoom("local speaker name → \(localName)")
+        }
+        // In a 1:1 call with one remote participant, use their name directly.
+        // With multiple remotes, keep "Others" — the platform speaker resolver
+        // handles per-segment attribution via active-speaker tracking.
+        if remoteNames.count == 1 {
+            LiveTranscriber.remoteSpeakerName = remoteNames[0]
+            ParfaitConsoleLog.zoom("remote speaker name → \(remoteNames[0])")
+        } else {
+            LiveTranscriber.remoteSpeakerName = "Others"
+        }
     }
 }

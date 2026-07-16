@@ -24,6 +24,25 @@ final class HTMLExporterTests: XCTestCase {
         XCTAssertFalse(html.contains("*"))
     }
 
+    func testSpacedAsterisksNotItalic() {
+        // CommonMark: * text * (whitespace-flanking) is not emphasis.
+        let html = HTMLExporter.renderMarkdown("The ratio was * 3 * and that was fine.")
+        XCTAssertFalse(html.contains("<em>"))
+        XCTAssertTrue(html.contains("* 3 *"))
+    }
+
+    func testSpacedAsterisksNotBold() {
+        // CommonMark: ** text ** (whitespace-flanking) is not bold.
+        let html = HTMLExporter.renderMarkdown("It was ** not important ** so we skipped it.")
+        XCTAssertFalse(html.contains("<strong>"))
+    }
+
+    func testSingleCharEmphasis() {
+        // Single-character emphasis like *a* should still render as italic.
+        let html = HTMLExporter.renderMarkdown("This is *a* test.")
+        XCTAssertTrue(html.contains("<em>a</em>"))
+    }
+
     func testBullets() {
         let html = HTMLExporter.renderMarkdown("- one\n- two\n\nafter")
         XCTAssertTrue(html.contains("<ul>"))

@@ -24,6 +24,26 @@ final class ZoomSpeakerTracker: @unchecked Sendable {
 
     /// Called on the main queue whenever the active remote speaker changes.
     var onActiveSpeaker: (@MainActor (String?) -> Void)?
+    /// Thread-safe snapshot of the active speaker name at a given elapsed time.
+    /// Called from the LiveTranscriber's handle() to attribute system-audio
+    /// segments to the Zoom-reported speaker instead of generic "Others".
+    func speakerAt(_ t: TimeInterval) -> String? {
+        queue.sync {
+            // Check the open segment first (most recent), then walk events backward.
+            if let open, t >= open.start {
+                return open.name
+            }
+            for event in events.reversed() where t >= event.start && t < event.end {
+                return event.name
+            }
+            return nil
+        }
+    }
+
+    /// Thread-safe snapshot of the current participant roster.
+    func currentRoster() -> [String] {
+        queue.sync { lastRoster }
+    }
 
     init(
         meetingID: UUID,
@@ -79,7 +99,13 @@ final class ZoomSpeakerTracker: @unchecked Sendable {
     private func logInitialScan() {
         let scan = ZoomActiveSpeakerReader.scan()
         ParfaitConsoleLog.zoom(
-            "initial scan zoomPID=\(scan.zoomPID.map(String.init) ?? "nil") roster=[\(scan.roster.joined(separator: ", "))] active=[\(scan.active.joined(separator: ", "))]")
+            "initial scan zoomPID=\(scan.zoomPID.map(String.init) ?? "nil") roster=[\(scan.roster.joined(separator: ", "))] active=[\(scan.active.joined(separator: ", "))] captions=\(scan.latestCaption.map { "\($0.name): \($0.text.prefix(40))" } ?? "none")")
+        // Full AX tree dump for debugging — reveals tile descriptions, roles, and
+        // attributes the parsers might miss. Logged at .info so it appears in Console.app.
+        if scan.roster.isEmpty && scan.active.isEmpty {
+            ParfaitConsoleLog.zoom("no roster or active speakers found — dumping full AX tree for diagnosis")
+            ZoomActiveSpeakerReader.dumpAXTree()
+        }
     }
 
     private func tick() {
@@ -231,10 +257,24 @@ enum ZoomActiveSpeakerReader {
         var activeLabels: [String] = []
         var selectedTiles: [String] = []
         var latestCaption: CaptionLine?
-        walk(
-            root, depth: 0, roster: &roster, activeTiles: &activeTiles,
-            activeLabels: &activeLabels, selectedTiles: &selectedTiles,
-            latestCaption: &latestCaption)
+        // Use kAXWindowsAttribute to get ALL windows, including those on other
+        // screens/Spaces. kAXChildrenAttribute on the app root may miss windows
+        // that aren't on the active Space or are on a secondary display.
+        let windows = allWindows(root)
+        if windows.isEmpty {
+            // Fallback: walk from the root if windows attribute is empty.
+            walk(
+                root, depth: 0, roster: &roster, activeTiles: &activeTiles,
+                activeLabels: &activeLabels, selectedTiles: &selectedTiles,
+                latestCaption: &latestCaption)
+        } else {
+            for window in windows {
+                walk(
+                    window, depth: 0, roster: &roster, activeTiles: &activeTiles,
+                    activeLabels: &activeLabels, selectedTiles: &selectedTiles,
+                    latestCaption: &latestCaption)
+            }
+        }
         let rosterOut = deduped(roster)
         // Gallery tiles list every unmuted participant; only trust explicit
         // "active speaker" markers on those tiles. Legacy labels (participants
@@ -256,6 +296,60 @@ enum ZoomActiveSpeakerReader {
             active: deduped(activeOut).filter { !isLocalParticipant($0) },
             activeSource: source,
             latestCaption: latestCaption)
+    }
+
+    /// Diagnostic: dumps the full Zoom AX tree (first ~500 elements) to the unified
+    /// log. Run at recording start and on demand to debug why speaker names aren't
+    /// being detected — reveals tile descriptions, roles, and attributes that the
+    /// parsers might be missing.
+    static func dumpAXTree() {
+        guard AccessibilityPermission.isTrusted else {
+            ParfaitConsoleLog.zoom("dumpAXTree — no Accessibility permission")
+            return
+        }
+        guard let app = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == mainBundleID
+        }) else {
+            ParfaitConsoleLog.zoom("dumpAXTree — Zoom not running")
+            return
+        }
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        var count = 0
+        let maxDump = 500
+        func dump(_ element: AXUIElement, depth: Int) {
+            guard count < maxDump else { return }
+            let r = role(element)
+            let desc = attribute(element, kAXDescriptionAttribute as CFString) ?? ""
+            let title = attribute(element, kAXTitleAttribute as CFString) ?? ""
+            let val = attribute(element, kAXValueAttribute as CFString) ?? ""
+            let sel = isSelected(element)
+            let indent = String(repeating: "  ", count: min(depth, 10))
+            if !desc.isEmpty || !title.isEmpty || !val.isEmpty || r != "AXUnknown" {
+                var parts = ["role=\(r)"]
+                if !desc.isEmpty { parts.append("desc=\(desc.prefix(120))") }
+                if !title.isEmpty { parts.append("title=\(title.prefix(80))") }
+                if !val.isEmpty { parts.append("val=\(val.prefix(80))") }
+                if sel { parts.append("SELECTED") }
+                ParfaitConsoleLog.zoom("AX[\(count)] \(indent)\(parts.joined(separator: " "))")
+                count += 1
+            }
+            for child in children(element) {
+                dump(child, depth: depth + 1)
+                if count >= maxDump { break }
+            }
+        }
+        ParfaitConsoleLog.zoom("=== Zoom AX Tree Dump (pid=\(app.processIdentifier)) ===")
+        let windows = allWindows(root)
+        if windows.isEmpty {
+            dump(root, depth: 0)
+        } else {
+            ParfaitConsoleLog.zoom("(\(windows.count) windows found via kAXWindowsAttribute)")
+            for window in windows {
+                dump(window, depth: 0)
+                if count >= maxDump { break }
+            }
+        }
+        ParfaitConsoleLog.zoom("=== AX Tree Dump: \(count) elements ===")
     }
 
     /// True when Zoom's display name matches the Mac account holder (local mic).
@@ -473,6 +567,16 @@ enum ZoomActiveSpeakerReader {
     private static func children(_ element: AXUIElement) -> [AXUIElement] {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
+              let list = value as? [AXUIElement] else { return [] }
+        return list
+    }
+
+    /// Returns all windows from the application root element, including those on
+    /// other screens, Spaces, or that are minimized. `kAXChildrenAttribute` misses
+    /// these; `kAXWindowsAttribute` is the complete list.
+    private static func allWindows(_ app: AXUIElement) -> [AXUIElement] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
               let list = value as? [AXUIElement] else { return [] }
         return list
     }

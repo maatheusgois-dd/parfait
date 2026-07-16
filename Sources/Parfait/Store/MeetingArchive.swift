@@ -255,23 +255,28 @@ final class MeetingArchive: @unchecked Sendable {
     }
 
     /// Case-insensitive multi-word search over titles, summaries, transcripts, attendees.
+    ///
+    /// Skips the expensive transcript JSON decode when the raw file bytes can't
+    /// contain any query word — a cheap `String.contains` pre-filter instead of
+    /// decoding thousands of `TranscriptSegment`s for every meeting.
     func search(_ query: String, limit: Int = 20) -> [SearchHit] {
         let words = query.lowercased().split(separator: " ").map(String.init).filter { !$0.isEmpty }
         guard !words.isEmpty else { return [] }
+        let lowerWords = words.map { $0.lowercased() }
         var hits: [SearchHit] = []
         for meeting in allMeetings() {
             var score = 0
             var excerpts: [String] = []
             let title = meeting.title.lowercased()
-            for w in words where title.contains(w) { score += 10 }
-            for name in meeting.attendees where words.contains(where: { name.lowercased().contains($0) }) {
+            for w in lowerWords where title.contains(w) { score += 10 }
+            for name in meeting.attendees where lowerWords.contains(where: { name.lowercased().contains($0) }) {
                 score += 6
                 excerpts.append("Attendee: \(name)")
             }
             let summary = summary(for: meeting.id)
             for line in summary.split(separator: "\n") {
                 let lower = line.lowercased()
-                if words.contains(where: { lower.contains($0) }) {
+                if lowerWords.contains(where: { lower.contains($0) }) {
                     score += 3
                     if excerpts.count < 6 { excerpts.append(String(line).trimmingCharacters(in: .whitespaces)) }
                 }
@@ -279,19 +284,30 @@ final class MeetingArchive: @unchecked Sendable {
             let notes = sideNotes(for: meeting.id)
             for line in notes.split(separator: "\n") {
                 let lower = line.lowercased()
-                if words.contains(where: { lower.contains($0) }) {
+                if lowerWords.contains(where: { lower.contains($0) }) {
                     score += 4
                     if excerpts.count < 6 { excerpts.append("Note: \(String(line).trimmingCharacters(in: .whitespaces))") }
                 }
             }
-            let speakerNames = Dictionary(uniqueKeysWithValues: meeting.speakers.map { ($0.id, $0.name) })
-            for seg in transcript(for: meeting.id) {
-                let lower = seg.text.lowercased()
-                if words.contains(where: { lower.contains($0) }) {
-                    score += 1
-                    if excerpts.count < 6 {
-                        let who = speakerNames[seg.speakerID] ?? seg.speakerID
-                        excerpts.append("\(who) @ \(Self.timestamp(seg.start)): \(seg.text)")
+            // Pre-filter: skip the transcript JSON decode entirely when the
+            // raw file bytes don't contain any query word. Reading the file as
+            // a String + lowercasing is far cheaper than decoding thousands of
+            // TranscriptSegment objects that would match nothing.
+            let transcriptURL = folder(for: meeting.id).appendingPathComponent("transcript.json")
+            if let rawData = try? Data(contentsOf: transcriptURL),
+               let rawString = String(data: rawData, encoding: .utf8) {
+                let lowerRaw = rawString.lowercased()
+                if lowerWords.contains(where: { lowerRaw.contains($0) }) {
+                    let speakerNames = Dictionary(uniqueKeysWithValues: meeting.speakers.map { ($0.id, $0.name) })
+                    for seg in (try? decoder.decode([TranscriptSegment].self, from: rawData)) ?? [] {
+                        let lower = seg.text.lowercased()
+                        if lowerWords.contains(where: { lower.contains($0) }) {
+                            score += 1
+                            if excerpts.count < 6 {
+                                let who = speakerNames[seg.speakerID] ?? seg.speakerID
+                                excerpts.append("\(who) @ \(Self.timestamp(seg.start)): \(seg.text)")
+                            }
+                        }
                     }
                 }
             }

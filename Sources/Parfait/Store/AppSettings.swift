@@ -27,6 +27,7 @@ enum SettingsKey {
     static let showLiveRecordingCard = "showLiveRecordingCard" // floating live transcript widget
     static let openMainWindowAtLaunch = "openMainWindowAtLaunch" // show main window on launch (vs. menu bar only)
     static let sideNotesPanelWidth = "sideNotesPanelWidth"
+    static let transcriptionModel = "transcriptionModel" // apple | parakeetStreaming | parakeetBatch | nemotron
     static let developerMode = "developerMode"                 // show Debug settings tab
 }
 
@@ -125,7 +126,7 @@ enum AppSettings {
             SettingsKey.preferredAIProvider: AIProvider.apple.rawValue,
             SettingsKey.askDeliveryMode: AskDeliveryMode.cli.rawValue,
             SettingsKey.askMaxTurns: 5,
-            SettingsKey.appearanceMode: AppearanceMode.system.rawValue,
+            SettingsKey.transcriptionModel: TranscriptionModel.apple.rawValue,
             SettingsKey.actionColorHex: Theme.defaultActionColorHex,
             SettingsKey.showLiveRecordingCard: true,
             SettingsKey.openMainWindowAtLaunch: true,
@@ -203,5 +204,9 @@ enum AppSettings {
     }
     static var developerMode: Bool {
         defaults.bool(forKey: SettingsKey.developerMode)
+    }
+    static var transcriptionModel: TranscriptionModel {
+        TranscriptionModel(rawValue: defaults.string(forKey: SettingsKey.transcriptionModel) ?? "")
+            ?? .apple
     }
 }

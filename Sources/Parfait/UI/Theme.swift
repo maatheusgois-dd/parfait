@@ -1,17 +1,19 @@
 import AppKit
 import SwiftUI
 
-/// Parfait palette — layered like the dessert: cream, raspberry, honey, blueberry, mint.
+/// Parfait palette — Medium-inspired light mode (cream, green, near-black) layered over the
+/// dessert dark mode (raspberry, honey, blueberry, mint).
 enum Theme {
-    static let defaultActionColorHex = "#E0396B"
+    static let defaultActionColorHex = "#1A8917"
 
-    static let cream = Color(red: 1.00, green: 0.976, blue: 0.949)          // #FFF9F2 surfaces
-    static let creamDeep = Color(red: 0.984, green: 0.945, blue: 0.894)     // #FBF1E4 cards
-    static let raspberry = Color(red: 0.878, green: 0.224, blue: 0.420)     // #E0396B primary
+    static let cream = Color(red: 0.976, green: 0.969, blue: 0.957)          // #F9F7F4 Medium page
+    static let creamDeep = Color(red: 1.00, green: 1.00, blue: 1.00)         // #FFFFFF Medium cards
+    static let raspberry = Color(red: 0.878, green: 0.224, blue: 0.420)     // #E0396B (preset)
     static let honey = Color(red: 0.949, green: 0.663, blue: 0.231)         // #F2A93B secondary
     static let blueberry = Color(red: 0.353, green: 0.416, blue: 0.812)     // #5A6ACF chat/links
     static let mint = Color(red: 0.247, green: 0.698, blue: 0.498)          // #3FB27F recording
-    static let cocoa = Color(red: 0.263, green: 0.196, blue: 0.169)         // #43322B text
+    static let cocoa = Color(red: 0.141, green: 0.141, blue: 0.161)         // #242429 Medium ink
+    static let mediumGreen = Color(red: 0.102, green: 0.537, blue: 0.090)   // #1A8917 Medium accent
 
     static let cornerRadius: CGFloat = 16
     /// Main feed column width — widened to use more of the detail pane.
@@ -19,10 +21,10 @@ enum Theme {
 
     /// User-configurable accent for prominent actions (Record, Save, Stop, …).
     static var action: Color {
-        Color(hex: AppSettings.actionColorHex) ?? raspberry
+        Color(hex: AppSettings.actionColorHex) ?? mediumGreen
     }
 
-    /// Card background that stays airy in light mode and warm-dark in dark mode.
+    /// Card background — Medium white in light mode, warm-dark in dark mode.
     static func surface(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color(red: 0.09, green: 0.09, blue: 0.09) : cream
     }
@@ -42,14 +44,14 @@ enum Theme {
                 : Color(red: 0.19, green: 0.19, blue: 0.19)
         }
         return isSelf
-            ? Color(red: 0.90, green: 0.92, blue: 0.98)
-            : Color(red: 0.94, green: 0.94, blue: 0.94)
+            ? Color(red: 0.90, green: 0.95, blue: 0.89)   // #E6F2E5 green-tinted self bubble
+            : Color(red: 0.95, green: 0.95, blue: 0.95)   // #F2F2F2 neutral
     }
 
     static func chip(_ scheme: ColorScheme) -> Color {
         scheme == .dark
             ? Color(red: 0.18, green: 0.18, blue: 0.18)
-            : Color(red: 0.94, green: 0.92, blue: 0.88)
+            : Color(red: 0.95, green: 0.95, blue: 0.95)   // #F2F2F2 neutral
     }
 
     /// Primary text — titles, meeting names, body copy.
@@ -70,13 +72,13 @@ enum Theme {
     static func secondary(_ scheme: ColorScheme) -> Color {
         scheme == .dark
             ? Color(red: 0.72, green: 0.68, blue: 0.64)
-            : Color(red: 0.42, green: 0.38, blue: 0.34)
+            : Color(red: 0.42, green: 0.42, blue: 0.42)   // #6B6B6B Medium gray
     }
 
     static func tertiary(_ scheme: ColorScheme) -> Color {
         scheme == .dark
             ? Color(red: 0.58, green: 0.54, blue: 0.50)
-            : Color(red: 0.55, green: 0.50, blue: 0.46)
+            : Color(red: 0.54, green: 0.54, blue: 0.54)   // #8A8A8A Medium gray
     }
 
     static func honey(_ scheme: ColorScheme) -> Color {
@@ -104,6 +106,7 @@ enum Theme {
 }
 
 enum ActionColorPreset: String, CaseIterable, Identifiable {
+    case mediumGreen = "#1A8917"
     case raspberry = "#E0396B"
     case rose = "#F0708F"
     case coral = "#FF6B5A"
@@ -116,6 +119,7 @@ enum ActionColorPreset: String, CaseIterable, Identifiable {
 
     var name: String {
         switch self {
+        case .mediumGreen: "Medium Green"
         case .raspberry: "Raspberry"
         case .rose: "Rose"
         case .coral: "Coral"
@@ -126,7 +130,7 @@ enum ActionColorPreset: String, CaseIterable, Identifiable {
         }
     }
 
-    var color: Color { Color(hex: rawValue) ?? Theme.raspberry }
+    var color: Color { Color(hex: rawValue) ?? Theme.mediumGreen }
 }
 
 extension Color {
@@ -238,7 +242,7 @@ struct ParfaitAppearanceModifier: ViewModifier {
     @AppStorage(SettingsKey.actionColorHex) private var actionColorHex = Theme.defaultActionColorHex
 
     func body(content: Content) -> some View {
-        let base = Color(hex: actionColorHex) ?? Theme.raspberry
+        let base = Color(hex: actionColorHex) ?? Theme.mediumGreen
         let action = Theme.prominentAction(base, scheme: scheme)
         content
             .preferredColorScheme(AppearanceMode(rawValue: appearanceMode)?.colorScheme)

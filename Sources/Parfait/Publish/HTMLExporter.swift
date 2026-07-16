@@ -47,9 +47,9 @@ enum HTMLExporter {
         <title>\(title)</title>
         <style>
         :root{
-          --page:#FFF9F2; --card:#FBF1E4; --accent:#E0396B; --honey:#F2A93B;
-          --link:#5A6ACF; --ink:#43322B; --muted:rgba(67,50,43,.62);
-          --border:rgba(67,50,43,.12); --chip:rgba(224,57,107,.09);
+          --page:#F9F7F4; --card:#FFFFFF; --accent:#1A8917; --honey:#F2A93B;
+          --link:#1A8917; --ink:#242429; --muted:rgba(42,42,42,.62);
+          --border:rgba(42,42,42,.12); --chip:rgba(26,137,23,.09);
         }
         @media (prefers-color-scheme: dark){
           :root{
@@ -67,7 +67,7 @@ enum HTMLExporter {
         main{max-width:720px; margin:0 auto; padding:44px 24px 56px}
         .parfait-bar{
           height:6px; border-radius:3px; margin-bottom:30px;
-          background:linear-gradient(90deg,#FFF9F2 0 25%,#F2A93B 25% 50%,#E0396B 50% 75%,#5A6ACF 75% 100%);
+          background:linear-gradient(90deg,#F9F7F4 0 25%,#F2A93B 25% 50%,#1A8917 50% 75%,#242429 75% 100%);
           box-shadow:inset 0 0 0 1px var(--border);
         }
         header h1{margin:0 0 10px; font-size:2.1rem; line-height:1.15; letter-spacing:-.015em; color:var(--accent)}

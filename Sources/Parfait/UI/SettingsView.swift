@@ -882,7 +882,7 @@ private struct AppearanceSettings: View {
     @AppStorage(SettingsKey.actionColorHex) private var actionColorHex = Theme.defaultActionColorHex
 
     private var baseActionColor: Color {
-        Color(hex: actionColorHex) ?? Theme.raspberry
+        Color(hex: actionColorHex) ?? Theme.mediumGreen
     }
 
     private var actionColor: Color {

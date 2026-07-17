@@ -43,6 +43,7 @@ private struct GeneralSettings: View {
     @State private var micStatus = MicRecorder.permissionGranted
     @AppStorage(SettingsKey.openMainWindowAtLaunch) private var openMainWindowAtLaunch = true
     @AppStorage(SettingsKey.developerMode) private var developerMode = false
+    @AppStorage(SettingsKey.crashDiagnostics) private var crashDiagnostics = false
     @State private var launchAtLogin = LaunchAtLogin.isOn
     @State private var systemAudioStatus = SystemAudioPermission.status()
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
@@ -195,6 +196,13 @@ private struct GeneralSettings: View {
                         }
                     }
                 Text("Shows a Debug tab with diagnostics and experimental options.")
+                    .font(.parfait(11))
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Save a crash diagnostic on crash", isOn: $crashDiagnostics)
+                Text("When Parfait crashes, writes a small scrubbed record (version, OS, signal, and the in-flight meeting's title and state — never audio, transcript, or notes) to ~/Library/Application Support/Parfait/diagnostics.json so you can attach it to a bug report. Off by default.")
                     .font(.parfait(11))
                     .foregroundStyle(.secondary)
             }
@@ -951,6 +959,10 @@ private struct AppearanceSettings: View {
 private struct DebugSettings: View {
     var body: some View {
         Form {
+            Section("Crashes") {
+                CrashHistoryPanel()
+                    .frame(minHeight: 320)
+            }
             Section("Logs") {
                 AIDebugLogPanel()
                     .frame(minHeight: 320)

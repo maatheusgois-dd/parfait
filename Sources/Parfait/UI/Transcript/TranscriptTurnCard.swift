@@ -18,6 +18,7 @@ struct TranscriptTurnCard: View {
                 .fill(speakerColor)
                 .frame(width: railWidth)
                 .padding(.vertical, 2)
+                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
@@ -29,6 +30,8 @@ struct TranscriptTurnCard: View {
                         }
                         .buttonStyle(.plain)
                         .help("Rename this speaker everywhere")
+                        .accessibilityLabel("Rename speaker \(speakerName)")
+                        .accessibilityHint("Rename this speaker everywhere in this meeting")
                     } else {
                         Text(speakerName)
                             .font(.parfait(12, .bold))
@@ -51,6 +54,15 @@ struct TranscriptTurnCard: View {
         .padding(14)
         .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: cornerRadius))
         .opacity(dimmed ? 0.45 : 1)
+        // Collapse the card into one VoiceOver element so a turn reads as a unit:
+        // "<speaker> at <timestamp>: <text>". The rename button stays reachable as
+        // an accessibility action when onRename is set.
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(speakerName) at \(MeetingArchive.timestamp(turn.start)): \(turn.text)")
+        .accessibilityAddTraits(dimmed ? [.isStaticText, .updatesFrequently] : [.isStaticText])
+        .ifLet(onRename) { view, rename in
+            view.accessibilityAction(named: "Rename speaker \(speakerName)", rename)
+        }
     }
 }
 
@@ -65,6 +77,7 @@ struct VolatileTailView: View {
                 .fill(Theme.honey(scheme).opacity(0.5))
                 .frame(width: 3)
                 .padding(.vertical, 2)
+                .accessibilityHidden(true)
 
             Text(text)
                 .font(.parfait(13))
@@ -78,5 +91,8 @@ struct VolatileTailView: View {
         .background(
             Theme.card(scheme).opacity(0.65),
             in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Live, not yet finalized: \(text)")
+        .accessibilityAddTraits([.isStaticText, .updatesFrequently])
     }
 }

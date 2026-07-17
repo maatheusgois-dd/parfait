@@ -22,14 +22,28 @@ struct TranscriptionSettings: View {
             Section("Speech recognition") {
                 Picker("Transcription engine", selection: $model) {
                     ForEach(TranscriptionModel.allCases) { option in
-                        Text(option.displayName).tag(option)
+                        if option.isAvailable {
+                            Text(option.displayName).tag(option)
+                        } else {
+                            // Unselectable: the inference engine isn't wired yet.
+                            // Shown greyed with a "coming soon" suffix so the user
+                            // sees what's coming but can't pick an inert engine.
+                            Text("\(option.displayName) — coming soon")
+                                .foregroundStyle(.secondary)
+                                .tag(model)
+                        }
                     }
                 }
-                Text(model.detail)
+                Text(currentModel.detail)
                     .font(.parfait(11))
                     .foregroundStyle(.secondary)
-                if model.isDownloadable {
-                    Text(model.supportsLiveTranscription
+                if !currentModel.isAvailable {
+                    Text("This engine isn't wired up yet — Parfait transcribes with Apple Speech until it ships. You can't download or select it today.")
+                        .font(.parfait(11))
+                        .foregroundStyle(.secondary)
+                }
+                if currentModel.isAvailable && currentModel.isDownloadable {
+                    Text(currentModel.supportsLiveTranscription
                          ? "Mode: live during meetings"
                          : "Mode: batch after recording")
                         .font(.parfait(11))
@@ -37,7 +51,7 @@ struct TranscriptionSettings: View {
                 }
             }
 
-            if model.isDownloadable {
+            if currentModel.isAvailable && currentModel.isDownloadable {
                 Section("\(model.displayName) model") {
                     modelStatusRow
                     if downloading || !installed {
@@ -60,6 +74,11 @@ struct TranscriptionSettings: View {
             Task { await refresh() }
         }
     }
+
+    /// Concrete snapshot of the selected model, read off the @AppStorage wrapper.
+    /// Some `model.foo` accesses inside ViewBuilder conditions resolve `model` as a
+    /// `Binding` (dynamic-member lookup), so we route through this plain value.
+    private var currentModel: TranscriptionModel { model }
 
     // MARK: - Rows
 

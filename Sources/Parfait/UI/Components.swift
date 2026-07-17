@@ -306,8 +306,18 @@ extension View {
                     .frame(width: width)
             }
     }
+    /// Applies `transform` to `self` only when `value` is non-nil, so optional
+    /// accessibility actions / modifiers can be attached conditionally without
+    /// `if`-branching the view tree (which would break ViewBuilder identity).
+    @ViewBuilder
+    func ifLet<T, R: View>(_ value: T?, transform: (Self, T) -> R) -> some View {
+        if let value {
+            transform(self, value)
+        } else {
+            self
+        }
+    }
 }
-
 struct CardBackground: ViewModifier {
     @Environment(\.colorScheme) private var scheme
 

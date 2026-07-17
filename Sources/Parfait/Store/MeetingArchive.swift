@@ -10,6 +10,7 @@ import Foundation
 ///         mic.m4a           the user's microphone
 ///         system.m4a        everyone else (process tap)
 ///         speaker_events.json  Zoom active-speaker timeline (optional)
+///         Edits/             snapshots of summary.md before each overwrite (last N)
 ///
 /// Thread-safe for the app's usage pattern: the UI goes through the
 /// @MainActor MeetingStore wrapper; the MCP server process is read-only.
@@ -225,8 +226,120 @@ final class MeetingArchive: @unchecked Sendable {
 
     func saveSummary(_ markdown: String, for id: UUID) throws {
         try queue.sync {
+            let summaryURL = folder(for: id).appendingPathComponent("summary.md")
+            // Snapshot the outgoing summary so edits are recoverable. Only when a
+            // non-empty summary already exists — the first write (empty → content)
+            // isn't an edit, and snapshotting it would store an empty file forever.
+            if let existing = try? String(contentsOf: summaryURL, encoding: .utf8),
+               !existing.isEmpty, existing != markdown {
+                snapshotSummary(existing, for: id)
+            }
             try markdown.data(using: .utf8)!
-                .write(to: folder(for: id).appendingPathComponent("summary.md"), options: .atomic)
+                .write(to: summaryURL, options: .atomic)
+        }
+    }
+
+    // MARK: - Summary edit history
+
+    /// Maximum number of summary snapshots kept per meeting. Oldest drop first.
+    static let maxSummaryHistory = 20
+
+    private func editsDir(for id: UUID) -> URL {
+        folder(for: id).appendingPathComponent("Edits", isDirectory: true)
+    }
+
+    /// Writes a snapshot of the outgoing summary into `Edits/`, named with a
+    /// millisecond-epoch timestamp + a short nonce so multiple edits in the same
+    /// millisecond don't collide. Lexicographic filename order == chronological
+    /// order, so pruning the oldest is just dropping the first N. Prunes to
+    /// `maxSummaryHistory`, oldest first.
+    private func snapshotSummary(_ markdown: String, for id: UUID) {
+        let dir = editsDir(for: id)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let epochMS = Int64(Date().timeIntervalSince1970 * 1000)
+        let nonce = String(UUID().uuidString.prefix(4))
+        let name = "summary-\(epochMS)-\(nonce).md"
+        let dest = dir.appendingPathComponent(name)
+        try? markdown.data(using: .utf8)!.write(to: dest, options: .atomic)
+        pruneSummaryHistory(for: id)
+    }
+
+    private func pruneSummaryHistory(for id: UUID) {
+        let dir = editsDir(for: id)
+        guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter({ $0.lastPathComponent.hasPrefix("summary-") && $0.pathExtension == "md" })
+            .sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+        else { return }
+        guard files.count > Self.maxSummaryHistory else { return }
+        for file in files.prefix(files.count - Self.maxSummaryHistory) {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
+    /// One saved summary snapshot: the timestamp is the write time (from the
+    /// filename), `markdown` is the full content of that version.
+    struct SummarySnapshot: Equatable, Sendable {
+        let timestamp: Date
+        let markdown: String
+    }
+    /// List saved summary snapshots for a meeting, newest first. Empty if the
+    /// summary has never been overwritten since first write.
+    func summaryHistory(for id: UUID) -> [SummarySnapshot] {
+        queue.sync {
+            let dir = editsDir(for: id)
+            guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+                .filter({ $0.lastPathComponent.hasPrefix("summary-") && $0.pathExtension == "md" })
+            else { return [] }
+            return files.compactMap { file -> SummarySnapshot? in
+                let name = file.deletingPathExtension().lastPathComponent
+                // summary-<epochMS>-<nonce> → drop prefix, split off nonce, parse epoch.
+                let withoutPrefix = String(name.dropFirst("summary-".count))
+                let parts = withoutPrefix.split(separator: "-")
+                guard parts.count >= 2, let epochMS = Int64(parts[0]) else { return nil }
+                guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+                return SummarySnapshot(timestamp: Date(timeIntervalSince1970: TimeInterval(epochMS) / 1000),
+                                        markdown: text)
+            }
+            .sorted { $0.timestamp > $1.timestamp }
+        }
+    }
+
+    /// Restore a prior summary snapshot: the current summary becomes a snapshot
+    /// itself (so restore is reversible), then the named version is written as
+    /// summary.md. Returns true on success.
+    @discardableResult
+    func restoreSummary(at timestamp: Date, for id: UUID) -> Bool {
+        // NOTE: runs entirely inside queue.sync. Do NOT call summaryHistory(for:)
+        // here — it also queue.syncs on this serial queue → deadlock. We inline
+        // the lookup via the private snapshot reader below.
+        queue.sync {
+            let dir = editsDir(for: id)
+            guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+                .filter({ $0.lastPathComponent.hasPrefix("summary-") && $0.pathExtension == "md" })
+            else { return false }
+            let target = files.compactMap { file -> SummarySnapshot? in
+                let name = file.deletingPathExtension().lastPathComponent
+                let withoutPrefix = String(name.dropFirst("summary-".count))
+                let parts = withoutPrefix.split(separator: "-")
+                guard parts.count >= 2, let epochMS = Int64(parts[0]) else { return nil }
+                guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+                return SummarySnapshot(timestamp: Date(timeIntervalSince1970: TimeInterval(epochMS) / 1000),
+                                        markdown: text)
+            }
+            .first(where: { $0.timestamp == timestamp })
+            guard let target else { return false }
+            let summaryURL = folder(for: id).appendingPathComponent("summary.md")
+            if let current = try? String(contentsOf: summaryURL, encoding: .utf8),
+               !current.isEmpty, current != target.markdown {
+                snapshotSummary(current, for: id)
+            }
+            do {
+                try target.markdown.data(using: .utf8)!
+                    .write(to: summaryURL, options: .atomic)
+                return true
+            } catch {
+                return false
+            }
         }
     }
 

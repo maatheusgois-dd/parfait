@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Parfait",
+    defaultLocalization: "en",
     platforms: [.macOS(.v26)],
     dependencies: [
         .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.15.5"),

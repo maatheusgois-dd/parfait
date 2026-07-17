@@ -63,6 +63,94 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(archive.summary(for: m.id), "## TL;DR\nShipped it.")
     }
 
+    // MARK: - Summary edit history
+
+    func testSaveSummarySnapshotsPreviousVersion() throws {
+        let m = makeMeeting()
+        try archive.save(m)
+        try archive.saveSummary("v1", for: m.id)
+        XCTAssertEqual(archive.summaryHistory(for: m.id), [])
+        // Overwriting with different content creates a snapshot of v1.
+        try archive.saveSummary("v2", for: m.id)
+        let history = archive.summaryHistory(for: m.id)
+        XCTAssertEqual(history.count, 1)
+        XCTAssertEqual(history[0].markdown, "v1")
+        XCTAssertEqual(archive.summary(for: m.id), "v2")
+    }
+
+    func testSaveSummaryDoesNotSnapshotIdenticalContent() throws {
+        let m = makeMeeting()
+        try archive.save(m)
+        try archive.saveSummary("same", for: m.id)
+        try archive.saveSummary("same", for: m.id)
+        XCTAssertEqual(archive.summaryHistory(for: m.id), [])
+    }
+
+    func testSaveSummaryDoesNotSnapshotEmptyToContent() throws {
+        let m = makeMeeting()
+        try archive.save(m)
+        // First write from empty → no snapshot (not an edit).
+        try archive.saveSummary("first real summary", for: m.id)
+        XCTAssertEqual(archive.summaryHistory(for: m.id), [])
+    }
+
+    func testHistoryIsNewestFirst() throws {
+        let m = makeMeeting()
+        try archive.save(m)
+        try archive.saveSummary("v1", for: m.id)
+        try archive.saveSummary("v2", for: m.id)
+        try archive.saveSummary("v3", for: m.id)
+        let history = archive.summaryHistory(for: m.id)
+        XCTAssertEqual(history.count, 2)
+        // Newest snapshot first: v2 was displaced by v3, v1 by v2.
+        XCTAssertEqual(history[0].markdown, "v2")
+        XCTAssertEqual(history[1].markdown, "v1")
+    }
+
+    func testHistoryPrunesToMax() throws {
+        let m = makeMeeting()
+        try archive.save(m)
+        try archive.saveSummary("v0", for: m.id)
+        // Write more than maxSummaryHistory versions.
+        for i in 1...(MeetingArchive.maxSummaryHistory + 5) {
+            try archive.saveSummary("v\(i)", for: m.id)
+        }
+        let history = archive.summaryHistory(for: m.id)
+        XCTAssertEqual(history.count, MeetingArchive.maxSummaryHistory)
+    }
+
+    func testRestoreSummarySwapsCurrentAndIsReversible() throws {
+        let m = makeMeeting()
+        try archive.save(m)
+        try archive.saveSummary("v1", for: m.id)
+        try archive.saveSummary("v2", for: m.id)
+        let v1Snapshot = archive.summaryHistory(for: m.id).first { $0.markdown == "v1" }!
+        // Restore v1: current "v2" becomes a snapshot, summary becomes v1.
+        XCTAssertTrue(archive.restoreSummary(at: v1Snapshot.timestamp, for: m.id))
+        XCTAssertEqual(archive.summary(for: m.id), "v1")
+        // v2 is now in history, so the restore is reversible.
+        let v2Snapshot = archive.summaryHistory(for: m.id).first { $0.markdown == "v2" }!
+        XCTAssertTrue(archive.restoreSummary(at: v2Snapshot.timestamp, for: m.id))
+        XCTAssertEqual(archive.summary(for: m.id), "v2")
+    }
+
+    func testRestoreSummaryUnknownTimestampFails() throws {
+        let m = makeMeeting()
+        try archive.save(m)
+        try archive.saveSummary("v1", for: m.id)
+        XCTAssertFalse(archive.restoreSummary(at: Date(timeIntervalSince1970: 0), for: m.id))
+    }
+
+    func testDeleteMeetingRemovesHistory() throws {
+        let m = makeMeeting()
+        try archive.save(m)
+        try archive.saveSummary("v1", for: m.id)
+        try archive.saveSummary("v2", for: m.id)
+        XCTAssertFalse(archive.summaryHistory(for: m.id).isEmpty)
+        try archive.delete(id: m.id)
+        XCTAssertEqual(archive.summaryHistory(for: m.id), [])
+    }
+
     func testSideNotesRoundTrip() throws {
         let m = makeMeeting()
         try archive.save(m)

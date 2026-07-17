@@ -87,22 +87,25 @@ final class MCPServer {
     static let toolDefinitions: [[String: Any]] = [
         [
             "name": "list_meetings",
-            "description": "List recent meetings (id, title, date, duration, attendees). Newest first.",
+            "description": "List recent meetings (id, title, date, duration, attendees). Newest first. Supports `limit` and `offset` for pagination; when more meetings exist beyond the page, a `next_offset` hint is appended to the text.",
             "inputSchema": [
                 "type": "object",
                 "properties": [
-                    "limit": ["type": "integer", "description": "Max meetings to return (default 20)"],
-                ],
+                    "limit": ["type": "integer", "description": "Max meetings to return in this page (default 20, capped at 200)."],
+                    "offset": ["type": "integer", "description": "0-based index of the first meeting to return. Use the `next_offset` value from the previous response to fetch the next page."],
+                ] as [String: Any],
             ] as [String: Any],
         ],
         [
             "name": "search_meetings",
-            "description": "Full-text search across meeting titles, summaries, transcripts, and attendees. Returns matching meetings with excerpt lines (speaker + timestamp).",
+            "description": "Full-text search across meeting titles, summaries, transcripts, and attendees. Returns matching meetings with excerpt lines (speaker + timestamp). Supports `limit` and `offset` for pagination; when more hits exist beyond the page, a `next_offset` hint is appended to the text.",
             "inputSchema": [
                 "type": "object",
                 "properties": [
                     "query": ["type": "string", "description": "Words to search for"],
-                ],
+                    "limit": ["type": "integer", "description": "Max hits to return in this page (default 20, capped at 200)."],
+                    "offset": ["type": "integer", "description": "0-based index of the first hit to return. Use the `next_offset` value from the previous response to fetch the next page."],
+                ] as [String: Any],
                 "required": ["query"],
             ] as [String: Any],
         ],
@@ -149,6 +152,17 @@ final class MCPServer {
                     "content": ["type": "string", "description": "New notes as Markdown, replacing the current notes in full"],
                 ],
                 "required": ["id", "content"],
+            ] as [String: Any],
+        ],
+        [
+            "name": "delete_meeting",
+            "description": "Delete a meeting and all of its files (transcript, summary, audio) by id. This is irreversible. Use it when the user explicitly asks to remove a meeting; otherwise prefer to keep history. Returns a short confirmation naming the deleted meeting's title.",
+            "inputSchema": [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string", "description": "Meeting UUID to delete permanently."],
+                ],
+                "required": ["id"],
             ] as [String: Any],
         ],
         [
@@ -250,21 +264,37 @@ final class MCPServer {
     func call(tool: String, arguments: [String: Any]) throws -> String {
         switch tool {
         case "list_meetings":
-            let limit = arguments["limit"] as? Int ?? 20
-            let meetings = archive.allMeetings().prefix(max(1, limit))
-            if meetings.isEmpty { return "No meetings recorded yet." }
-            return meetings.map(Self.describe).joined(separator: "\n")
+            let limit = max(1, min(200, arguments["limit"] as? Int ?? 20))
+            let offset = max(0, arguments["offset"] as? Int ?? 0)
+            let all = archive.allMeetings()
+            if all.isEmpty { return "No meetings recorded yet." }
+            guard offset < all.count else { return "No more meetings (offset \(offset) ≥ \(all.count))." }
+            let page = Array(all.dropFirst(offset).prefix(limit))
+            var body = page.map(Self.describe).joined(separator: "\n")
+            let nextOffset = offset + page.count
+            if nextOffset < all.count {
+                body += "\n\nnext_offset: \(nextOffset) (more meetings remain; pass offset=\(nextOffset) to fetch the next page)"
+            }
+            return body
 
         case "search_meetings":
             guard let query = arguments["query"] as? String, !query.isEmpty else {
                 throw ToolError.badArgument("'query' is required")
             }
-            let hits = archive.search(query)
-            if hits.isEmpty { return "No meetings matched \"\(query)\"." }
-            return hits.map { hit in
+            let limit = max(1, min(200, arguments["limit"] as? Int ?? 20))
+            let offset = max(0, arguments["offset"] as? Int ?? 0)
+            let all = archive.search(query)
+            if all.isEmpty { return "No meetings matched \"\(query)\"." }
+            guard offset < all.count else { return "No more matches for \"\(query)\" (offset \(offset) ≥ \(all.count))." }
+            let page = Array(all.dropFirst(offset).prefix(limit))
+            var body = page.map { hit in
                 Self.describe(hit.meeting) + hit.excerpts.map { "\n    · \($0)" }.joined()
+            }.joined(separator: "\n")
+            let nextOffset = offset + page.count
+            if nextOffset < all.count {
+                body += "\n\nnext_offset: \(nextOffset) (more matches remain; pass offset=\(nextOffset) to fetch the next page)"
             }
-            .joined(separator: "\n")
+            return body
 
         case "get_meeting":
             let meeting = try meetingArg(arguments)
@@ -294,6 +324,11 @@ final class MCPServer {
             }
             try archive.saveSummary(content, for: meeting.id)
             return "Updated the notes for \"\(meeting.title)\"."
+
+        case "delete_meeting":
+            let meeting = try meetingArg(arguments)
+            try archive.delete(id: meeting.id)
+            return "Deleted meeting \"\(meeting.title)\" (\(meeting.id.uuidString)) and all of its files."
 
         case "regenerate_summary":
             return try regenerateSummary(meeting: try meetingArg(arguments), arguments: arguments)

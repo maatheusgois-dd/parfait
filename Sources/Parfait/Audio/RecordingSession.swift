@@ -30,9 +30,9 @@ final class RecordingSession: ObservableObject {
     private let tap = SystemAudioTap()
     private let archive: MeetingArchive
     private var liveTranscriber: LiveTranscriber?
-    private var zoomSpeakerTracker: ZoomSpeakerTracker?
+    private var platformSpeakerTracker: PlatformSpeakerTracker?
     private var activeObserver: NSObjectProtocol?
-    private var zoomRosterTimer: Timer?
+    private var rosterTimer: Timer?
     private var systemSignalCheck: Task<Void, Never>?
     private var lastLivePersist = Date.distantPast
     private var ticker: Timer?
@@ -214,10 +214,10 @@ final class RecordingSession: ObservableObject {
             NotificationCenter.default.removeObserver(activeObserver)
             self.activeObserver = nil
         }
-        zoomSpeakerTracker?.stop()
-        zoomSpeakerTracker = nil
-        zoomRosterTimer?.invalidate()
-        zoomRosterTimer = nil
+        platformSpeakerTracker?.stop()
+        platformSpeakerTracker = nil
+        rosterTimer?.invalidate()
+        rosterTimer = nil
         liveRoster = []
         LiveTranscriber.localSpeakerName = "You"
         LiveTranscriber.remoteSpeakerName = "Others"
@@ -268,13 +268,14 @@ final class RecordingSession: ObservableObject {
                 "ensureZoomTracker skipped source=\(sourceApp ?? "manual") accessibility=\(AccessibilityPermission.isTrusted)")
             return
         }
-        if zoomSpeakerTracker != nil {
+        if platformSpeakerTracker != nil {
             ParfaitConsoleLog.zoom("ensureZoomTracker — already running")
             return
         }
         ParfaitConsoleLog.zoom(
             "ensureZoomTracker — creating tracker accessibility=\(AccessibilityPermission.isTrusted)")
-        let tracker = ZoomSpeakerTracker(
+        let tracker = PlatformSpeakerTrackerFactory.forApp(
+            bundleID: sourceApp,
             meetingID: meetingID,
             archive: archive,
             startDate: startedAt,
@@ -284,9 +285,9 @@ final class RecordingSession: ObservableObject {
             self?.activeRemoteSpeaker = name
         }
         // Poll the tracker's roster for the live UI (participant names).
-        let rosterTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let tracker = self.zoomSpeakerTracker else { return }
+                guard let self, let tracker = self.platformSpeakerTracker else { return }
                 let roster = tracker.currentRoster()
                 if roster != self.liveRoster {
                     self.liveRoster = roster
@@ -295,9 +296,9 @@ final class RecordingSession: ObservableObject {
                 }
             }
         }
-        rosterTimer.tolerance = 0.5
-        zoomRosterTimer = rosterTimer
-        // Bridge: LiveTranscriber queries the Zoom tracker's timeline to attribute
+        timer.tolerance = 0.5
+        rosterTimer = timer
+        // Bridge: LiveTranscriber queries the platform tracker's timeline to attribute
         // system-audio segments to the active speaker's name in real time.
         if let live = liveTranscriber {
             live.platformSpeakerResolver = { [weak tracker] t in
@@ -305,7 +306,7 @@ final class RecordingSession: ObservableObject {
             }
             ParfaitConsoleLog.zoom("platformSpeakerResolver wired to LiveTranscriber")
         }
-        zoomSpeakerTracker = tracker
+        platformSpeakerTracker = tracker
         tracker.start()
 
         // Do an immediate roster scan so participant names appear right away,

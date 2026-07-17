@@ -179,7 +179,10 @@ final class CalendarStore: ObservableObject {
         observers.append(NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in await self?.refreshAgenda() }
+            // Debounced: UserDefaults fires on every defaults write (toggling a
+            // setting can fire dozens of times), so coalesce into a single refresh
+            // 2s later rather than hammering EventKit on each change.
+            Task { @MainActor in self?.scheduleRefresh() }
         })
     }
 

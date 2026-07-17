@@ -1,15 +1,19 @@
 import Accelerate
 import AVFoundation
 import CoreAudio
+import ExceptionCatch
 
 enum MicRecorderError: LocalizedError {
     case alreadyRecording
     case inputUnavailable
+    case tapInstallFailed(reason: String)
 
     var errorDescription: String? {
         switch self {
         case .alreadyRecording: return "Microphone recording is already in progress."
         case .inputUnavailable: return "No usable microphone input was found."
+        case .tapInstallFailed(let reason):
+            return "Audio tap could not be installed: \(reason). This usually clears when the audio route settles."
         }
     }
 }
@@ -361,8 +365,19 @@ final class MicRecorder: @unchecked Sendable {
             }
             self.converter = converter
         }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+        let tapBlock: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { [weak self] buffer, _ in
             self?.process(buffer)
+        }
+        // installTap throws an ObjC NSException (not a Swift Error) when the format
+        // doesn't match the live route — e.g. Bluetooth headphones connecting
+        // mid-recording flips the hardware format. Swift can't catch NSException,
+        // so an unwrapped throw becomes SIGABRT and kills the app. Run it inside an
+        // ObjC @try/@catch and surface it as a Swift error instead.
+        let exception = NutolaTryBlock {
+            input.installTap(onBus: 0, bufferSize: 1024, format: format, block: tapBlock)
+        }
+        if let exception {
+            throw MicRecorderError.tapInstallFailed(reason: "\(exception.name.rawValue): \(exception.reason ?? "(no reason)")")
         }
     }
 

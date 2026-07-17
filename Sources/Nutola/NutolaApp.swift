@@ -213,9 +213,23 @@ struct MenuBarLabel: View {
     }
 
     static let templateIcon: NSImage? = {
+        // Resolve the SPM resource bundle defensively. The generated `Bundle.module`
+        // accessor only checks `Bundle.main.bundleURL` (the .app root) and a stale
+        // build-time path, but `make app` ships the bundle under `Contents/Resources/`
+        // (the canonical macOS location, exposed as `Bundle.main.resourceURL`). If
+        // neither of the accessor's paths resolves — e.g. after a project rename or a
+        // hand-assembled .app — it `fatalError`s at first menu-bar render and the app
+        // can never relaunch. Look there ourselves before touching `Bundle.module`.
+        let bundle: Bundle = {
+            let name = "Nutola_Nutola"
+            if let resourceURL = Bundle.main.resourceURL,
+               let b = Bundle(url: resourceURL.appendingPathComponent("\(name).bundle"))
+            { return b }
+            return Bundle.module
+        }()
         // Bundle image lookup pairs the @2x representation; NSImage(contentsOf:)
         // would load only the 1x bitmap and render blurry on Retina.
-        guard let image = Bundle.module.image(forResource: "NavIcon") else { return nil }
+        guard let image = bundle.image(forResource: "NavIcon") else { return nil }
         image.isTemplate = true
         image.size = NSSize(width: 18, height: 18)
         return image

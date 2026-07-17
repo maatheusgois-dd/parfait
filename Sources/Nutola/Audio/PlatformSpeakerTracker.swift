@@ -35,18 +35,16 @@ enum PlatformSpeakerTrackerFactory {
         startDate: Date,
         elapsedOffset: TimeInterval
     ) -> PlatformSpeakerTracker {
-        switch bundleID {
-        case "us.zoom.xos", "us.zoom.VideoHost":
+        if MeetingDetector.isZoomSource(bundleID) {
             return ZoomSpeakerTracker(
                 meetingID: meetingID,
                 archive: archive,
                 startDate: startDate,
                 elapsedOffset: elapsedOffset)
-        default:
-            // Meet, Teams, FaceTime, Webex, manual — no AX reader yet.
-            // Diarization + the fallback "Others" speaker carry the load.
-            return NoopSpeakerTracker()
         }
+        // Meet, Teams, FaceTime, Webex, manual — no AX reader yet.
+        // Diarization + the fallback "Others" speaker carry the load.
+        return NoopSpeakerTracker()
     }
 }
 

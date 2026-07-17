@@ -1,6 +1,6 @@
+import Foundation
 import AppKit
 import ApplicationServices
-import Foundation
 
 /// Polls the installed Zoom Workplace client during recording and logs who the
 /// meeting UI marks as speaking. Events are written to `speaker_events.json`

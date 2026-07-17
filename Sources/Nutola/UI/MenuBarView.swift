@@ -37,29 +37,45 @@ struct MenuBarView: View {
             upcoming
             recent
             Divider()
-            HStack {
-                Button("Open Nutola") { openMain() }
-                    .buttonStyle(.plain)
-                    .font(.nutola(12, .medium))
-                    .foregroundStyle(Theme.blueberry)
-                Spacer()
-                Button {
-                    showQuitConfirm = true
-                } label: {
-                    Image(systemName: "power")
-                        .font(.nutola(13, .medium))
-                        .foregroundStyle(.red)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
+            if showQuitConfirm {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Quit Nutola?")
+                        .font(.nutola(12, .semibold))
+                        .foregroundStyle(Theme.heading(scheme))
+                    Text(app.isRecording
+                         ? "A recording is in progress."
+                         : "Nutola will stop running in the background.")
+                        .font(.nutola(10))
+                        .foregroundStyle(Theme.secondary(scheme))
+                    HStack {
+                        Spacer()
+                        Button("Cancel") { showQuitConfirm = false }
+                            .controlSize(.small)
+                        Button("Quit", role: .destructive) { NSApp.terminate(nil) }
+                            .controlSize(.small)
+                    }
                 }
-                .buttonStyle(.plain)
-                .help("Quit Nutola")
+                .padding(.top, 4)
+            } else {
+                HStack {
+                    Button("Open Nutola") { openMain() }
+                        .buttonStyle(.plain)
+                        .font(.nutola(12, .medium))
+                        .foregroundStyle(Theme.blueberry)
+                    Spacer()
+                    Button {
+                        showQuitConfirm = true
+                    } label: {
+                        Image(systemName: "power")
+                            .font(.nutola(13, .medium))
+                            .foregroundStyle(.red)
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Quit Nutola")
+                }
             }
-        }
-        .confirmationDialog("Quit Nutola?", isPresented: $showQuitConfirm) {
-            Button("Quit", role: .destructive) { NSApp.terminate(nil) }
-        } message: {
-            Text(app.isRecording ? "A recording is in progress." : "Nutola will stop running in the background.")
         }
         .padding(14)
         .frame(width: 320)

@@ -28,6 +28,17 @@ final class RecordingServiceImpl: RecordingService {
         if !MicRecorder.permissionGranted {
             let granted = await MicRecorder.requestPermission()
             NutolaConsoleLog.recording("mic permission requested granted=\(granted) status=\(MicRecorder.permissionGranted)")
+            if !granted {
+                // The TCC prompt was denied or didn't appear (common with ad-hoc
+                // signed apps after a rebuild — macOS silently denies). Open
+                // System Settings so the user can toggle it manually.
+                NutolaConsoleLog.recording("mic permission DENIED — opening System Settings → Microphone")
+                await MainActor.run {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
         }
         let sysBefore = SystemAudioPermission.statusLabel
         if SystemAudioPermission.status() == .unknown {
@@ -131,6 +142,14 @@ final class RecordingServiceImpl: RecordingService {
         if !MicRecorder.permissionGranted {
             let granted = await MicRecorder.requestPermission()
             NutolaConsoleLog.recording("mic permission requested granted=\(granted) status=\(MicRecorder.permissionGranted)")
+            if !granted {
+                NutolaConsoleLog.recording("mic permission DENIED — opening System Settings → Microphone")
+                await MainActor.run {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
         }
         let sysBefore = SystemAudioPermission.statusLabel
         if SystemAudioPermission.status() == .unknown {

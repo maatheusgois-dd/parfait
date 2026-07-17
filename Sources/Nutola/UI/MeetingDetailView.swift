@@ -61,7 +61,28 @@ struct MeetingDetailView: View {
         }
         .background(Theme.surface(scheme))
         .safeAreaInset(edge: .bottom) {
-            if let join = joinConference, showProminentJoinButton {
+            if canContinueRecording {
+                // Resume recording is the primary action — show it at the bottom
+                // where it's most accessible, alongside Join Zoom if available.
+                VStack(spacing: 8) {
+                    Button {
+                        Task { await app.continueRecording(meetingID: meeting.id) }
+                    } label: {
+                        Label("Resume recording", systemImage: "mic.fill")
+                            .font(.nutola(13, .semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Theme.mint(scheme))
+                    if let join = joinConference, showProminentJoinButton {
+                        ConferenceJoinButton(label: join.label, url: join.url, prominent: true)
+                            .frame(maxWidth: 560)
+                    }
+                }
+                .frame(maxWidth: 560)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+            } else if let join = joinConference, showProminentJoinButton {
                 ConferenceJoinButton(label: join.label, url: join.url, prominent: true)
                     .frame(maxWidth: 560)
                     .padding(.horizontal, 24)
@@ -446,9 +467,11 @@ struct MeetingDetailView: View {
             EmptyStateView(
                 title: emptyNotesTitle,
                 message: emptyNotesMessage,
-                actionTitle: emptyNotesActionTitle,
-                actionIcon: emptyNotesActionIcon,
-                action: emptyNotesAction,
+                // When resume is available, the action lives in the bottom
+                // safeAreaInset — don't duplicate it here.
+                actionTitle: canContinueRecording ? nil : emptyNotesActionTitle,
+                actionIcon: canContinueRecording ? nil : emptyNotesActionIcon,
+                action: canContinueRecording ? nil : emptyNotesAction,
                 secondaryActionTitle: emptyNotesSecondaryActionTitle,
                 secondaryAction: emptyNotesSecondaryAction,
                 tips: emptyNotesTips)
@@ -581,20 +604,20 @@ struct MeetingDetailView: View {
     }
 
     private var noticePrimaryActionTitle: String? {
-        if canContinueRecording { return "Resume recording" }
+        // When resume is available, the action lives in the bottom safeAreaInset.
+        if canContinueRecording { return nil }
         if meeting.state == .failed { return "Retry" }
         if meeting.notice != nil { return "Regenerate" }
         return nil
     }
 
     private var noticePrimaryActionIcon: String? {
-        canContinueRecording ? "mic.fill" : nil
+        // Resume icon lives in the bottom bar now; only show icons for other actions.
+        canContinueRecording ? nil : (noticePrimaryActionTitle != nil ? "arrow.clockwise" : nil)
     }
 
     private var noticePrimaryAction: (() -> Void)? {
-        if canContinueRecording {
-            return { Task { await app.continueRecording(meetingID: meeting.id) } }
-        }
+        if canContinueRecording { return nil }
         if meeting.state == .failed || meeting.notice != nil {
             return { Task { await app.retry(meetingID: meeting.id) } }
         }

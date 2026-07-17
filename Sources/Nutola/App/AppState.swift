@@ -56,9 +56,25 @@ final class AppState: NSObject, ObservableObject {
     /// A meeting left in a resumable state (failed/ready/prep) when no session is
     /// active — e.g. a crash-orphaned recording the user is about to rejoin. The
     /// menu bar uses this to swap "Start recording" for "Resume recording".
+    /// Only returns meetings whose calendar event is still in progress — if the
+    /// event has ended, the user should see "Start recording" instead.
     var resumableMeeting: Meeting? {
         guard session == nil, !container.recordingService.isRecording else { return nil }
-        return store.meetings.first { $0.canResumeRecording(isRecording: false) }
+        return store.meetings.first { meeting in
+            meeting.canResumeRecording(isRecording: false) && meetingIsStillLive(meeting)
+        }
+    }
+
+    /// True if the meeting's calendar event is still in progress (or has no
+    /// calendar event, in which case we err on the side of resumable for a
+    /// short grace period after the meeting was created).
+    private func meetingIsStillLive(_ meeting: Meeting) -> Bool {
+        if let eventID = meeting.calendarEventID,
+           let event = calendar.event(id: eventID, start: meeting.calendarEventStart) {
+            return event.isInProgress
+        }
+        // No calendar link: allow resume within 30 minutes of creation.
+        return Date().timeIntervalSince(meeting.createdAt) < 1800
     }
 
     /// Resume the most recent resumable meeting, if any. Used by the menu bar's

@@ -53,6 +53,21 @@ final class AppState: NSObject, ObservableObject {
 
     var isRecording: Bool { session != nil || container.recordingService.isRecording }
 
+    /// A meeting left in a resumable state (failed/ready/prep) when no session is
+    /// active — e.g. a crash-orphaned recording the user is about to rejoin. The
+    /// menu bar uses this to swap "Start recording" for "Resume recording".
+    var resumableMeeting: Meeting? {
+        guard session == nil, !container.recordingService.isRecording else { return nil }
+        return store.meetings.first { $0.canResumeRecording(isRecording: false) }
+    }
+
+    /// Resume the most recent resumable meeting, if any. Used by the menu bar's
+    /// "Resume recording" button when no session is live.
+    func resumeOrphanIfAny() async {
+        guard let meeting = resumableMeeting else { return }
+        await continueRecording(meetingID: meeting.id)
+    }
+
     private init(container: DependencyContainer) {
         self.container = container
         showLiveRecordingCard = container.settings.showLiveRecordingCard

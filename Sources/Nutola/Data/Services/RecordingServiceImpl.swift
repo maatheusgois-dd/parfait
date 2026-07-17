@@ -23,8 +23,6 @@ final class RecordingServiceImpl: RecordingService {
         settings: SettingsRepository
     ) async -> Result<RecordingSessionHandle, RecordingError> {
         guard !isRecording, !isStartingRecording else { return .failure(.alreadyRecording) }
-        _isStartingRecording = true
-        defer { _isStartingRecording = false }
         NutolaConsoleLog.recording("start requested source=\(sourceApp ?? "manual") calendar=\(calendarEvent?.title ?? "none")")
 
         if !MicRecorder.permissionGranted {
@@ -43,6 +41,11 @@ final class RecordingServiceImpl: RecordingService {
             calendarRepository: calendarRepository,
             settings: settings)
 
+        // Resume an existing meeting for this calendar event (e.g. re-joining a call
+        // after a crash). Delegate to continueRecording WITHOUT holding the
+        // _isStartingRecording flag — continueRecording manages its own, and its
+        // `!isStartingRecording` guard would otherwise reject us with
+        // .alreadyRecording, leaving the orphan un-resumable through this path.
         if let event = resolvedCalendarEvent,
            let existing = calendarRepository.meetingForCalendarEvent(
                event, in: meetingRepository.meetings),
@@ -50,6 +53,11 @@ final class RecordingServiceImpl: RecordingService {
             NutolaConsoleLog.recording("resuming existing meeting for calendar event \"\(event.title)\"")
             return await continueRecording(meetingID: existing.id, meetingRepository: meetingRepository)
         }
+
+        // Fresh start: claim the flag only now, after the resume branch. The
+        // resume path above owns its own flag lifecycle.
+        _isStartingRecording = true
+        defer { _isStartingRecording = false }
 
         var meeting = Meeting(title: Meeting.placeholderTitle(for: Date()), createdAt: Date())
         meeting.sourceApp = sourceApp

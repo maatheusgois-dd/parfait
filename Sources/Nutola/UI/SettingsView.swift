@@ -417,7 +417,7 @@ private struct CalendarSettings: View {
     private func grantAccess() async {
         calendarStatus = await CalendarAuthorization.requestAccess()
         reloadCalendars()
-        await app.calendar.refreshAgenda()
+        await app.calendar.resetEventStoreAfterGrant()
     }
 
     private func resetCalendars() {

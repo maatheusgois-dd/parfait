@@ -42,7 +42,7 @@ struct ComingUpView: View {
                 emptyCalendarCard("Grant calendar access in Settings to see your schedule.") {
                     Task {
                         _ = await CalendarAuthorization.requestAccess()
-                        await app.calendar.refreshAgenda()
+                        await app.calendar.resetEventStoreAfterGrant()
                     }
                 }
             } else if timelineDays.isEmpty {

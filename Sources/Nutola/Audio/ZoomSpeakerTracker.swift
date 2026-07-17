@@ -21,6 +21,7 @@ final class ZoomSpeakerTracker: PlatformSpeakerTracker, @unchecked Sendable {
     private var lastSummary = Date.distantPast
     private var lastCaptionKey: String?
     private var lastRoster: [String] = []
+    private var rosterPersisted = false
 
     /// Called on the main queue whenever the active remote speaker changes.
     var onActiveSpeaker: (@MainActor (String?) -> Void)?
@@ -87,6 +88,14 @@ final class ZoomSpeakerTracker: PlatformSpeakerTracker, @unchecked Sendable {
             self.timer = nil
             self.closeOpen(until: self.now)
             self.persist(force: true)
+            // Always persist the final roster so the batch pipeline can attribute
+            // speaker names even if the roster never changed during the call
+            // (the tick() save is gated on roster change, which never fires for
+            // a stable participant list — leaving no zoom_roster.json behind).
+            if !self.lastRoster.isEmpty {
+                self.archive.saveZoomRoster(self.lastRoster, for: self.meetingID)
+                NutolaConsoleLog.zoom("stop: persisted final roster (\(self.lastRoster.count) names)")
+            }
             let saved = PlatformSpeakerTurnBuilder.normalized(self.events)
             NutolaConsoleLog.zoom(
                 "stop ticks=\(self.tickCount) events=\(saved.count) saved=\(saved.map { "\($0.name) \(String(format: "%.1f", $0.start))-\(String(format: "%.1f", $0.end))" }.joined(separator: ", "))")
@@ -138,9 +147,13 @@ final class ZoomSpeakerTracker: PlatformSpeakerTracker, @unchecked Sendable {
             persist(force: false)
         }
 
-        if scan.roster != lastRoster {
+        // Persist the roster whenever it changes, OR on the first non-empty scan
+        // (the change-gating alone never fires for a stable participant list, so the
+        // batch pipeline would find no zoom_roster.json and lose all speaker names).
+        if scan.roster != lastRoster || (!scan.roster.isEmpty && !rosterPersisted) {
             lastRoster = scan.roster
             archive.saveZoomRoster(scan.roster, for: meetingID)
+            rosterPersisted = true
         }
 
         let now = Date()

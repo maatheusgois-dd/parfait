@@ -51,6 +51,17 @@ final class RecordingServiceImpl: RecordingService {
                event, in: meetingRepository.meetings),
            existing.canResumeRecording(isRecording: false) {
             NutolaConsoleLog.recording("resuming existing meeting for calendar event \"\(event.title)\"")
+            // A crash-orphan may have been created before the source was known
+            // (sourceApp == nil), which stops the Zoom speaker tracker from
+            // starting on resume — so the live UI gets no named speakers and
+            // the final transcript has no roster. Update it to the source we
+            // just detected (e.g. Zoom) so the tracker starts on the resumed call.
+            if let sourceApp, existing.sourceApp == nil {
+                var updated = existing
+                updated.sourceApp = sourceApp
+                meetingRepository.upsert(updated)
+                NutolaConsoleLog.recording("resume: set source=\(sourceApp) on orphan \(existing.id.uuidString.prefix(8))")
+            }
             return await continueRecording(meetingID: existing.id, meetingRepository: meetingRepository)
         }
 

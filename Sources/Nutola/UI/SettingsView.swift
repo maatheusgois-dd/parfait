@@ -215,6 +215,7 @@ private struct GeneralSettings: View {
             accessibilityTrusted = AccessibilityPermission.isTrusted
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            micStatus = MicRecorder.permissionGranted
             systemAudioStatus = SystemAudioPermission.status()
             accessibilityTrusted = AccessibilityPermission.isTrusted
         }

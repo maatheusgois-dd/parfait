@@ -29,6 +29,7 @@ enum SettingsKey {
     static let sideNotesPanelWidth = "sideNotesPanelWidth"
     static let transcriptionModel = "transcriptionModel" // apple | parakeetStreaming | parakeetBatch | nemotron
     static let developerMode = "developerMode"                 // show Debug settings tab
+    static let crashDiagnostics = "crashDiagnostics"           // write a scrubbed diagnostic on crash (opt-in)
 }
 
 enum AppearanceMode: String, CaseIterable, Identifiable, Hashable {
@@ -132,6 +133,7 @@ enum AppSettings {
             SettingsKey.openMainWindowAtLaunch: true,
             SettingsKey.sideNotesPanelWidth: 280.0,
             SettingsKey.developerMode: false,
+            SettingsKey.crashDiagnostics: false,
         ])
     }
 
@@ -204,6 +206,9 @@ enum AppSettings {
     }
     static var developerMode: Bool {
         defaults.bool(forKey: SettingsKey.developerMode)
+    }
+    static var crashDiagnostics: Bool {
+        defaults.bool(forKey: SettingsKey.crashDiagnostics)
     }
     static var transcriptionModel: TranscriptionModel {
         TranscriptionModel(rawValue: defaults.string(forKey: SettingsKey.transcriptionModel) ?? "")

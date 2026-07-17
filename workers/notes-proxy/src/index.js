@@ -240,6 +240,82 @@ export async function isBlocked(env, user, gistId) {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Per-token rate limiting (in-memory token bucket, scoped to the opaque link)
+// ---------------------------------------------------------------------------
+//
+// A leaked or guessed gist link can be hammered for bandwidth and upstream
+// fetches; a bounded token bucket per link token caps that cheaply. State lives
+// in module scope, so it's per-isolate and resets when the Worker recycles —
+// fine for abuse braking, not a guarantee. Defaults are conservative; override
+// with env.RATE_LIMIT_RPM (requests/minute) and env.RATE_LIMIT_BURST.
+
+const DEFAULT_RATE_LIMIT_RPM = 30;
+const DEFAULT_RATE_LIMIT_BURST = 10;
+// Soft cap on distinct tokens tracked, so a flood of distinct links can't
+// grow the map unbounded. Oldest entries drop first (FIFO-ish via Map order).
+const RATE_LIMIT_MAX_TOKENS = 4096;
+
+/**
+ * Per-token bucket state. `tokens` is a float for fractional refill; `last`
+ * is ms-since-epoch of the last refill. Stored in a Map keyed by the opaque
+ * link token (already validated and URL-safe by the time we call this).
+ */
+const rateBuckets = new Map();
+
+/**
+ * Pure, side-effect-free check: given a key, now (ms), rpm, burst, and the
+ * buckets map, returns { allowed, remaining, retryAfterMs } and mutates the
+ * map in place (refilling + deducting). Exported for unit tests.
+ *
+ * `env` is read for RATE_LIMIT_RPM / RATE_LIMIT_BURST when provided so the
+ * caller doesn't have to plumb them; pass `undefined` for defaults.
+ */
+export function checkRateLimit(key, nowMs, env) {
+  const rpm = rateLimitRpm(env);
+  const burst = rateLimitBurst(env);
+  const refillPerMs = rpm / 60000;
+
+  let bucket = rateBuckets.get(key);
+  if (!bucket) {
+    bucket = { tokens: burst, last: nowMs };
+    rateBuckets.set(key, bucket);
+    // Bound the map: if it grew past the cap, evict the oldest entry. Map
+    // iterates in insertion order, so the first key is the oldest.
+    if (rateBuckets.size > RATE_LIMIT_MAX_TOKENS) {
+      const oldest = rateBuckets.keys().next().value;
+      if (oldest !== undefined) rateBuckets.delete(oldest);
+    }
+  }
+
+  // Refill: how many tokens accrued since the last check, capped at burst.
+  const elapsed = Math.max(0, nowMs - bucket.last);
+  bucket.tokens = Math.min(burst, bucket.tokens + elapsed * refillPerMs);
+  bucket.last = nowMs;
+
+  if (bucket.tokens >= 1) {
+    bucket.tokens -= 1;
+    return { allowed: true, remaining: Math.floor(bucket.tokens), retryAfterMs: 0 };
+  }
+  // Time until one token refills, rounded up to the next second for the
+  // Retry-After header (HTTP wants seconds).
+  const retryAfterMs = Math.ceil(1000 / Math.max(1, refillPerMs));
+  return { allowed: false, remaining: 0, retryAfterMs };
+}
+
+/// Introspection for tests / debug panels.
+export function _rateLimitStateSize() { return rateBuckets.size; }
+export function _resetRateLimit() { rateBuckets.clear(); }
+
+function rateLimitRpm(env) {
+  const v = Number(env?.RATE_LIMIT_RPM);
+  return Number.isFinite(v) && v > 0 ? v : DEFAULT_RATE_LIMIT_RPM;
+}
+function rateLimitBurst(env) {
+  const v = Number(env?.RATE_LIMIT_BURST);
+  return Number.isFinite(v) && v > 0 ? v : DEFAULT_RATE_LIMIT_BURST;
+}
+
 function plainResponse(status, body, cacheMaxAge, extraHeaders) {
   const headers = new Headers({ 'Content-Type': 'text/plain; charset=utf-8' });
   if (cacheMaxAge != null) headers.set('Cache-Control', `max-age=${cacheMaxAge}`);
@@ -281,6 +357,18 @@ export default {
       return finalizeForMethod(plainResponse(400, 'Bad Request', 60), request.method);
     }
     const { user, gistId, sha, filename } = parsed;
+
+    // Rate limit per opaque link token. The pathname is the single opaque token,
+    // so it's the natural per-link key. Cache hits still count: a cached response
+    // still costs Worker CPU + egress, and a leaked link shouldn't be hammerable
+    // even when the edge has it cached. 429 is NOT cached (transient).
+    const rl = checkRateLimit(url.pathname, Date.now(), env);
+    if (!rl.allowed) {
+      const res = plainResponse(429, 'Too Many Requests', null, {
+        'Retry-After': String(Math.ceil(rl.retryAfterMs / 1000)),
+      });
+      return finalizeForMethod(res, request.method);
+    }
 
     const cache = caches.default;
     const cacheKey = buildCacheKey(user, gistId, sha, filename);

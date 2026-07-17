@@ -7,6 +7,8 @@ import worker, {
   hasGeneratorMarker,
   SECURITY_HEADERS,
   isBlocked,
+  checkRateLimit,
+  _resetRateLimit,
 } from '../src/index.js';
 
 // ---------------------------------------------------------------------------
@@ -326,6 +328,7 @@ describe('handler', () => {
 
   beforeEach(() => {
     installFakeCache();
+    _resetRateLimit();
   });
 
   test('405 for POST, with Allow header', async () => {
@@ -592,4 +595,115 @@ test('lintBody rejects http-equiv smuggled behind a quoted ">" in a meta tag', (
 test('lintBody passes when http-equiv appears only as escaped text after a meta tag', () => {
   const body = '<meta charset="utf-8"><title>x</title><p>we discussed http-equiv today</p>';
   assert.equal(lintBody(body.toLowerCase()), false);
+});
+
+// ---------------------------------------------------------------------------
+// checkRateLimit: pure token-bucket logic (no HTTP, no cache, no fetch)
+// ---------------------------------------------------------------------------
+
+describe('checkRateLimit', () => {
+  beforeEach(() => {
+    _resetRateLimit();
+  });
+
+  test('first request within burst is allowed', () => {
+    const r = checkRateLimit('/token-a', 1_000, {});
+    assert.equal(r.allowed, true);
+    assert.ok(r.remaining >= 0);
+    assert.equal(r.retryAfterMs, 0);
+  });
+
+  test('burst exhausts then 429s until refill', () => {
+    const now = 1_000;
+    // Default burst is 10: 10 allowed, 11th denied.
+    for (let i = 0; i < 10; i++) {
+      assert.equal(checkRateLimit('/token-b', now, {}).allowed, true, `req ${i}`);
+    }
+    const denied = checkRateLimit('/token-b', now, {});
+    assert.equal(denied.allowed, false);
+    assert.equal(denied.remaining, 0);
+    assert.ok(denied.retryAfterMs > 0);
+  });
+
+  test('tokens refill over time at the configured RPM', () => {
+    // 60 rpm => 1 token/sec. After 1s at burst 10, we get exactly 1 back.
+    const env = { RATE_LIMIT_RPM: 60, RATE_LIMIT_BURST: 10 };
+    // Drain the bucket.
+    for (let i = 0; i < 10; i++) checkRateLimit('/token-c', 0, env);
+    assert.equal(checkRateLimit('/token-c', 0, env).allowed, false);
+    // 1 second later, one token has refilled.
+    const r = checkRateLimit('/token-c', 1_000, env);
+    assert.equal(r.allowed, true);
+    // The next immediate call is denied again (only one token refilled).
+    assert.equal(checkRateLimit('/token-c', 1_000, env).allowed, false);
+  });
+
+  test('separate keys have separate buckets', () => {
+    const env = { RATE_LIMIT_RPM: 60, RATE_LIMIT_BURST: 1 };
+    assert.equal(checkRateLimit('/a', 0, env).allowed, true);
+    assert.equal(checkRateLimit('/a', 0, env).allowed, false);
+    // Different key has its own bucket.
+    assert.equal(checkRateLimit('/b', 0, env).allowed, true);
+  });
+
+  test('env overrides apply (custom rpm + burst)', () => {
+    const env = { RATE_LIMIT_RPM: 1_200, RATE_LIMIT_BURST: 2 };
+    // burst 2
+    assert.equal(checkRateLimit('/token-d', 0, env).allowed, true);
+    assert.equal(checkRateLimit('/token-d', 0, env).allowed, true);
+    assert.equal(checkRateLimit('/token-d', 0, env).allowed, false);
+  });
+
+  test('malformed env values fall back to defaults', () => {
+    const env = { RATE_LIMIT_RPM: 'not-a-number', RATE_LIMIT_BURST: -3 };
+    // Default burst is 10.
+    for (let i = 0; i < 10; i++) {
+      assert.equal(checkRateLimit('/token-e', 0, env).allowed, true);
+    }
+    assert.equal(checkRateLimit('/token-e', 0, env).allowed, false);
+  });
+});
+
+describe('handler rate limiting (end-to-end)', () => {
+  beforeEach(() => {
+    installFakeCache();
+    _resetRateLimit();
+  });
+
+  test('429 after burst is exhausted, with Retry-After header', async () => {
+    const restore = installFetchStub(async () => fakeUpstream(200, realisticDoc()));
+    const { ctx } = makeCtx();
+    const path = pathFor(USER, GIST_32, SHA_40, FILENAME);
+    // Tiny burst to force a 429 quickly.
+    const env = { RATE_LIMIT_RPM: 1, RATE_LIMIT_BURST: 2 };
+    const r1 = await worker.fetch(makeRequest(path), env, ctx);
+    const r2 = await worker.fetch(makeRequest(path), env, ctx);
+    const r3 = await worker.fetch(makeRequest(path), env, ctx);
+    restore();
+    assert.equal(r1.status, 200);
+    assert.equal(r2.status, 200);
+    assert.equal(r3.status, 429);
+    const retryAfter = r3.headers.get('Retry-After');
+    assert.ok(retryAfter, '429 must carry a Retry-After header');
+    assert.ok(Number(retryAfter) >= 1, 'Retry-After is at least 1 second');
+  });
+
+  test('429 is not cached (Retry-After is for the client, not the edge)', async () => {
+    const cache = installFakeCache();
+    const restore = installFetchStub(async () => fakeUpstream(200, realisticDoc()));
+    const { ctx, flush } = makeCtx();
+    const path = pathFor(USER, GIST_32, SHA_40, FILENAME);
+    const env = { RATE_LIMIT_RPM: 1, RATE_LIMIT_BURST: 1 };
+    // First request succeeds and is cached.
+    await worker.fetch(makeRequest(path), env, ctx);
+    await flush();
+    // Second request is rate-limited (burst 1) — it must NOT write the 429 to the cache.
+    const r429 = await worker.fetch(makeRequest(path), env, ctx);
+    restore();
+    assert.equal(r429.status, 429);
+    // The cache should only hold the 200, never the 429.
+    for (const value of cache.store.values()) {
+      assert.notEqual(value.status, 429);
+    }
+  });
 });

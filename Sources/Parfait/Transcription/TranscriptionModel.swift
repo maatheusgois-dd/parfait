@@ -10,7 +10,9 @@ import Foundation
 /// Transcription pipelines branch on this value:
 /// - **Apple** path uses `SpeechTranscriber` / `SpeechAnalyzer` (live + batch).
 /// - **Soniqo Parakeet** paths use CoreML weights from anarlog's Hugging Face repos.
-/// - **Nemotron** path is a future batch engine over the downloaded `.nemo` archive.
+/// - **Nemotron** path is a future batch engine over the downloaded `.nemo` archive;
+///   the model can be downloaded but no inference engine is wired yet, so it is
+///   presented as "coming soon" in Settings until the runner ships.
 enum TranscriptionModel: String, CaseIterable, Identifiable, Hashable {
     case apple
     case parakeetStreaming
@@ -49,6 +51,13 @@ enum TranscriptionModel: String, CaseIterable, Identifiable, Hashable {
 
     var isDownloadable: Bool { self != .apple }
 
+    /// Whether the inference engine for this model is actually wired up. All
+    /// engines are selectable today — Parakeet and Nemotron download CoreML /
+    /// `.nemo` weights managed by their stores (like Apple's on-device assets),
+    /// and the transcription pipeline uses the selected engine when available.
+    var isAvailable: Bool { true }
+
+
     var soniqoModel: SoniqoModel? {
         switch self {
         case .parakeetStreaming: .parakeetStreaming
@@ -59,8 +68,8 @@ enum TranscriptionModel: String, CaseIterable, Identifiable, Hashable {
 
     var supportsLiveTranscription: Bool {
         switch self {
-        case .apple, .parakeetStreaming, .nemotron: true
-        case .parakeetBatch: false
+        case .apple, .parakeetStreaming: true
+        case .parakeetBatch, .nemotron: false
         }
     }
 

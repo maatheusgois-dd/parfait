@@ -81,7 +81,7 @@ final class MCPServerTests: XCTestCase {
         let tools = (resp["result"] as! [String: Any])["tools"] as! [[String: Any]]
         let names = tools.map { $0["name"] as! String }.sorted()
         XCTAssertEqual(names, [
-            "create_template", "delete_template", "get_live_transcript", "get_meeting",
+            "create_template", "delete_meeting", "delete_template", "get_live_transcript", "get_meeting",
             "get_template", "get_transcript", "list_meetings", "list_templates",
             "regenerate_summary", "rename_template", "search_meetings", "update_summary",
             "update_template",
@@ -363,6 +363,63 @@ final class MCPServerTests: XCTestCase {
             "params": ["name": "regenerate_summary", "arguments": [
                 "id": meeting.id.uuidString, "template": "Nonexistent Template",
             ]],
+        ])
+        XCTAssertEqual((resp["result"] as! [String: Any])["isError"] as? Bool, true)
+    }
+
+    // MARK: - list_meetings pagination
+
+    func testListMeetingsPaginatesWithOffset() throws {
+        // Seed 3 more meetings (4 total incl. setUp's), newest first.
+        for i in 0..<3 {
+            var m = Meeting(title: "Sync \(i)", createdAt: Date().addingTimeInterval(TimeInterval(i)))
+            m.state = .ready
+            try archive.createFolder(for: m.id)
+            try archive.save(m)
+        }
+        let page1 = try roundTrip([
+            "jsonrpc": "2.0", "id": 40, "method": "tools/call",
+            "params": ["name": "list_meetings", "arguments": ["limit": 2, "offset": 0]],
+        ])
+        let text1 = (((page1["result"] as! [String: Any])["content"] as! [[String: Any]])[0]["text"] as! String)
+        XCTAssertTrue(text1.contains("next_offset: 2"), "first page should hint at more")
+
+        let page2 = try roundTrip([
+            "jsonrpc": "2.0", "id": 41, "method": "tools/call",
+            "params": ["name": "list_meetings", "arguments": ["limit": 2, "offset": 2]],
+        ])
+        let text2 = (((page2["result"] as! [String: Any])["content"] as! [[String: Any]])[0]["text"] as! String)
+        // Last page: no next_offset hint.
+        XCTAssertFalse(text2.contains("next_offset"))
+    }
+
+    func testListMeetingsOffsetBeyondEndIsExplicit() throws {
+        let resp = try roundTrip([
+            "jsonrpc": "2.0", "id": 42, "method": "tools/call",
+            "params": ["name": "list_meetings", "arguments": ["limit": 20, "offset": 999]],
+        ])
+        let text = (((resp["result"] as! [String: Any])["content"] as! [[String: Any]])[0]["text"] as! String)
+        XCTAssertTrue(text.contains("No more meetings"))
+    }
+
+    // MARK: - delete_meeting
+
+    func testDeleteMeetingRemovesIt() throws {
+        let resp = try roundTrip([
+            "jsonrpc": "2.0", "id": 43, "method": "tools/call",
+            "params": ["name": "delete_meeting", "arguments": ["id": meeting.id.uuidString]],
+        ])
+        let result = resp["result"] as! [String: Any]
+        XCTAssertEqual(result["isError"] as? Bool, false)
+        let text = ((result["content"] as! [[String: Any]])[0]["text"] as! String)
+        XCTAssertTrue(text.contains("Deleted"))
+        XCTAssertNil(archive.meeting(id: meeting.id))
+    }
+
+    func testDeleteMeetingUnknownIdIsError() throws {
+        let resp = try roundTrip([
+            "jsonrpc": "2.0", "id": 44, "method": "tools/call",
+            "params": ["name": "delete_meeting", "arguments": ["id": UUID().uuidString]],
         ])
         XCTAssertEqual((resp["result"] as! [String: Any])["isError"] as? Bool, true)
     }

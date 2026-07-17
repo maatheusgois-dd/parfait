@@ -15,6 +15,7 @@ final class TranscriptionModelTests: XCTestCase {
 
     func testPersistsChoice() {
         UserDefaults.standard.set(TranscriptionModel.parakeetStreaming.rawValue, forKey: SettingsKey.transcriptionModel)
+        // parakeetStreaming's inference engine is wired, so the getter returns it.
         XCTAssertEqual(AppSettings.transcriptionModel, .parakeetStreaming)
         UserDefaults.standard.removeObject(forKey: SettingsKey.transcriptionModel)
         XCTAssertEqual(AppSettings.transcriptionModel, .apple)
@@ -32,6 +33,25 @@ final class TranscriptionModelTests: XCTestCase {
         XCTAssertTrue(TranscriptionModel.nemotron.isDownloadable)
         XCTAssertTrue(TranscriptionModel.parakeetStreaming.isDownloadable)
         XCTAssertTrue(TranscriptionModel.parakeetBatch.isDownloadable)
+    }
+
+    func testIsAvailable() {
+        // All engines are selectable: Parakeet and Nemotron download weights
+        // managed by their stores, like Apple's on-device assets. The user's
+        // choice round-trips through AppSettings.transcriptionModel.
+        for model in TranscriptionModel.allCases {
+            XCTAssertTrue(model.isAvailable, "\(model.rawValue) should be selectable")
+        }
+    }
+
+    func testEveryModelPersistsAndRoundTrips() {
+        for model in TranscriptionModel.allCases {
+            UserDefaults.standard.set(model.rawValue, forKey: SettingsKey.transcriptionModel)
+            XCTAssertEqual(AppSettings.transcriptionModel, model,
+                           "\(model.rawValue) should round-trip via AppSettings")
+        }
+        UserDefaults.standard.removeObject(forKey: SettingsKey.transcriptionModel)
+        XCTAssertEqual(AppSettings.transcriptionModel, .apple)
     }
 
     func testSoniqoMapping() {

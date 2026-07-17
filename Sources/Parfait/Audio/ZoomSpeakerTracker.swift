@@ -5,7 +5,7 @@ import Foundation
 /// Polls the installed Zoom Workplace client during recording and logs who the
 /// meeting UI marks as speaking. Events are written to `speaker_events.json`
 /// and later correlated with the system-audio transcript.
-final class ZoomSpeakerTracker: @unchecked Sendable {
+final class ZoomSpeakerTracker: PlatformSpeakerTracker, @unchecked Sendable {
     private let meetingID: UUID
     private let archive: MeetingArchive
     private let startDate: Date

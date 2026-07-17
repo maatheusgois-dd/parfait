@@ -133,8 +133,10 @@ Then from any session (or the desktop app with the same server):
 > "Search my meetings for when I last discussed hiring, and summarize what was decided."
 
 The MCP server (`Parfait --mcp`) speaks stdio over your on-disk library. Read tools:
-`list_meetings`, `search_meetings`, `get_meeting`, `get_transcript`, and `get_live_transcript`
-(the meeting in progress). Edit tools: `regenerate_summary`, `update_summary`, and the template
+`list_meetings` (paginated via `limit`/`offset`), `search_meetings` (paginated),
+`get_meeting`, `get_transcript`, and `get_live_transcript`
+(the meeting in progress). Edit tools: `regenerate_summary`, `update_summary`,
+`delete_meeting`, and the template
 tools (`list_templates`, `get_template`, `create_template`, `update_template`, `rename_template`,
 `delete_template`). Nothing leaves your Mac except what the model reads or writes through them.
 

@@ -29,6 +29,7 @@ struct LiveTranscriptReaderView: View {
                 EmptyStateView(
                     title: "Listening…",
                     message: "The live transcript appears here as people speak.")
+                    .accessibilityLabel("Listening. The live transcript appears here as people speak.")
             } else {
                 transcriptScroll
             }
@@ -43,6 +44,8 @@ struct LiveTranscriptReaderView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(actionColor)
+                .accessibilityLabel("Stop recording")
+                .accessibilityHint("Stops the recording and finalizes the transcript")
                 Spacer()
             }
             .padding(.horizontal, 20)

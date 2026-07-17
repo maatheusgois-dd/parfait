@@ -28,6 +28,10 @@ final class AppState: NSObject, ObservableObject {
 
     @Published private(set) var session: RecordingSession?
     @Published private(set) var recordingMeeting: Meeting?
+    /// Signal-safe mirror of the in-flight meeting metadata, kept in sync with
+    /// `recordingMeeting` so `CrashDiagnosticLog` can read it from a signal handler
+    /// without touching the @MainActor. Only id/title/state/notice — never audio.
+    nonisolated(unsafe) private var inFlightCrashMirror: CrashDiagnosticLog.InFlightMeeting?
     @Published var recordingCardDismissed = false
     @Published var recordingCardMinimized = true
     @Published var showLiveRecordingCard: Bool
@@ -130,6 +134,12 @@ final class AppState: NSObject, ObservableObject {
 
     func bootstrap() {
         ParfaitConsoleLog.app("bootstrap starting")
+        // Hand the crash logger a signal-safe reader for the in-flight meeting.
+        CrashDiagnosticLog.inFlightMeetingSnapshot = { [weak self] in
+            // Plain struct read — safe from a signal handler. The mirror is
+            // updated on the main thread whenever recording starts/stops.
+            return self?.inFlightCrashMirror
+        }
         container.notificationService.configure { [weak self] id in
             Task { @MainActor in
                 self?.openMeetingID = id
@@ -160,10 +170,20 @@ final class AppState: NSObject, ObservableObject {
         }
     }
 
+    private func updateInFlightCrashMirror() {
+        guard let meeting = recordingMeeting else { inFlightCrashMirror = nil; return }
+        inFlightCrashMirror = CrashDiagnosticLog.InFlightMeeting(
+            id: meeting.id.uuidString,
+            title: meeting.title,
+            state: meeting.state.rawValue,
+            notice: meeting.notice)
+    }
+
     func prepareForTermination() {
         container.recordingService.prepareForTermination(meetingRepository: store)
         session = nil
         recordingMeeting = nil
+        updateInFlightCrashMirror()
     }
 
     // MARK: - Detection
@@ -238,6 +258,7 @@ final class AppState: NSObject, ObservableObject {
         ParfaitConsoleLog.recording("AppState.stopRecording")
         session = nil
         recordingMeeting = nil
+        updateInFlightCrashMirror()
         _ = await container.stopRecording.execute()
     }
 
@@ -245,6 +266,7 @@ final class AppState: NSObject, ObservableObject {
         ParfaitConsoleLog.recording("AppState.discardRecording")
         session = nil
         recordingMeeting = nil
+        updateInFlightCrashMirror()
         container.discardRecording.execute()
     }
 
@@ -284,6 +306,7 @@ final class AppState: NSObject, ObservableObject {
     private func applyRecordingHandle(_ handle: RecordingSessionHandle) {
         session = handle.session
         recordingMeeting = handle.meeting
+        updateInFlightCrashMirror()
         openMeetingID = handle.meeting.id
     }
 

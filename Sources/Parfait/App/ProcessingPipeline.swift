@@ -266,12 +266,12 @@ enum ProcessingPipeline {
         return signature(a) == signature(b)
     }
 
-    private static func appendOffset(meeting: Meeting, prior: [TranscriptSegment]) -> TimeInterval {
+    static func appendOffset(meeting: Meeting, prior: [TranscriptSegment]) -> TimeInterval {
         guard !prior.isEmpty else { return 0 }
         return max(meeting.duration, prior.map(\.end).max() ?? 0)
     }
 
-    private static func offsetSegments(
+    static func offsetSegments(
         _ segments: [TranscriptSegment], by offset: TimeInterval
     ) -> [TranscriptSegment] {
         segments.map { seg in
@@ -282,7 +282,7 @@ enum ProcessingPipeline {
         }
     }
 
-    private static func mergingSpeakers(existing: [Speaker], new: [Speaker]) -> [Speaker] {
+    static func mergingSpeakers(existing: [Speaker], new: [Speaker]) -> [Speaker] {
         var merged = existing
         for speaker in new where !merged.contains(where: { $0.id == speaker.id }) {
             merged.append(speaker)

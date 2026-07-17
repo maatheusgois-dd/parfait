@@ -12,6 +12,9 @@ enum Bootstrap {
         // A claude/gh subprocess (or the MCP client) exiting before draining a
         // pipe would otherwise SIGPIPE-kill the whole app mid-recording.
         signal(SIGPIPE, SIG_IGN)
+        // Opt-in crash handlers (no-op unless AppSettings.crashDiagnostics is on).
+        // Installed before ParfaitApp.main() so an early crash is still captured.
+        CrashDiagnosticLog.install()
         let args = CommandLine.arguments
         if args.contains("--version") {
             print("parfait \(version)")

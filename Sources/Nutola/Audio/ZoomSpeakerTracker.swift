@@ -273,18 +273,25 @@ enum ZoomActiveSpeakerReader {
         var activeLabels: [String] = []
         var selectedTiles: [String] = []
         var latestCaption: CaptionLine?
-        // Use kAXWindowsAttribute to get ALL windows, including those on other
-        // screens/Spaces. kAXChildrenAttribute on the app root may miss windows
-        // that aren't on the active Space or are on a secondary display.
-        let windows = allWindows(root)
-        if windows.isEmpty {
-            // Fallback: walk from the root if windows attribute is empty.
+        // Strategy: try multiple AX entry points to find participant tiles.
+        // 1. kAXWindowsAttribute — all windows (works when on the active Space).
+        // 2. kAXFocusedWindowAttribute — the focused window (works even when on
+        //    another Space — kAXWindowsAttribute returns 0 for inactive Spaces,
+        //    but the focused window is still accessible with its full subtree).
+        // 3. kAXChildrenAttribute on root — last resort (usually just the menu bar).
+        var scannedWindows = allWindows(root)
+        if scannedWindows.isEmpty {
+            if let focused = focusedWindow(root) {
+                scannedWindows = [focused]
+            }
+        }
+        if scannedWindows.isEmpty {
             walk(
                 root, depth: 0, roster: &roster, activeTiles: &activeTiles,
                 activeLabels: &activeLabels, selectedTiles: &selectedTiles,
                 latestCaption: &latestCaption)
         } else {
-            for window in windows {
+            for window in scannedWindows {
                 walk(
                     window, depth: 0, roster: &roster, activeTiles: &activeTiles,
                     activeLabels: &activeLabels, selectedTiles: &selectedTiles,
@@ -595,5 +602,16 @@ enum ZoomActiveSpeakerReader {
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
               let list = value as? [AXUIElement] else { return [] }
         return list
+    }
+
+    /// The focused window — accessible even when on an inactive Space, unlike
+    /// `kAXWindowsAttribute` which returns an empty list for windows on other
+    /// Spaces. The focused window's full AX subtree (participant tiles, etc.)
+    /// remains available regardless of which Space it's on.
+    private static func focusedWindow(_ app: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value)
+        guard err == .success, let value else { return nil }
+        return value as! AXUIElement
     }
 }

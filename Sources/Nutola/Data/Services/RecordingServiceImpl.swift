@@ -95,6 +95,25 @@ final class RecordingServiceImpl: RecordingService {
         }
         NutolaConsoleLog.recording("continue \(meetingID.uuidString.prefix(8)) fromPrep=\(fromPrep) duration=\(Int(meeting.duration))s")
 
+        // Claim the meeting and reset its files SYNCHRONOUSLY, before the async
+        // permission awaits below. A late orphan-finalization task (cancel is
+        // cooperative, so process() may still be mid-flight) reads the meeting
+        // fresh and bails on `guard fresh.state == .processing` once we've flipped
+        // to .recording — so flip first. This also reclaims the audio/transcript
+        // files before process() can write them.
+        let archive = meetingRepository.archive
+        if !fromPrep {
+            for url in [archive.micURL(for: meetingID), archive.systemURL(for: meetingID)] {
+                try? FileManager.default.removeItem(at: url)
+            }
+            archive.removeLiveTranscript(for: meetingID)
+            archive.removePlatformSpeakerEvents(for: meetingID)
+            archive.removeZoomRoster(for: meetingID)
+        }
+        meeting.state = .recording
+        meeting.notice = nil
+        meetingRepository.upsert(meeting)
+
         _isStartingRecording = true
         defer { _isStartingRecording = false }
 
@@ -108,20 +127,6 @@ final class RecordingServiceImpl: RecordingService {
         }
         NutolaConsoleLog.recording("permissions mic=\(MicRecorder.permissionGranted) system=\(SystemAudioPermission.statusLabel) (was \(sysBefore))")
         guard !isRecording else { return .failure(.alreadyRecording) }
-
-        let archive = meetingRepository.archive
-        if !fromPrep {
-            for url in [archive.micURL(for: meetingID), archive.systemURL(for: meetingID)] {
-                try? FileManager.default.removeItem(at: url)
-            }
-            archive.removeLiveTranscript(for: meetingID)
-            archive.removePlatformSpeakerEvents(for: meetingID)
-            archive.removeZoomRoster(for: meetingID)
-        }
-
-        meeting.state = .recording
-        meeting.notice = nil
-        meetingRepository.upsert(meeting)
 
         let newSession = RecordingSession(
             meetingID: meeting.id,

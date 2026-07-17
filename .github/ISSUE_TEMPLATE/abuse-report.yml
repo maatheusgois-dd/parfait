@@ -1,12 +1,12 @@
-name: "Abuse report: notes.parfait.to"
-description: Report a notes.parfait.to link that's phishing, malware, infringing, or otherwise abusive.
+name: "Abuse report: notes.nutola.to"
+description: Report a notes.nutola.to link that's phishing, malware, infringing, or otherwise abusive.
 title: "[abuse] "
 labels: ["abuse"]
 body:
   - type: markdown
     attributes:
       value: |
-        Use this form to report a `notes.parfait.to` link. This is the canonical
+        Use this form to report a `notes.nutola.to` link. This is the canonical
         abuse-intake route for the notes proxy — there's no separate abuse@
         inbox or DMCA agent yet, so reports filed here are what gets acted on.
 
@@ -14,8 +14,8 @@ body:
     id: url
     attributes:
       label: Reported URL
-      description: The full notes.parfait.to link you're reporting.
-      placeholder: https://notes.parfait.to/<user>/<gistid>/raw/<sha>/<filename>.html
+      description: The full notes.nutola.to link you're reporting.
+      placeholder: https://notes.nutola.to/<user>/<gistid>/raw/<sha>/<filename>.html
     validations:
       required: true
 

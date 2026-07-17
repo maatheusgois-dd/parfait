@@ -1,5 +1,5 @@
-APP_NAME   := Parfait
-BUNDLE_ID  := io.github.conrad-vanl.Parfait
+APP_NAME   := Nutola
+BUNDLE_ID  := io.github.matheusgois-dd.Nutola
 DIST       := dist
 APP        := $(DIST)/$(APP_NAME).app
 BINARY     := .build/release/$(APP_NAME)
@@ -18,12 +18,12 @@ SIGN_ID    ?= -
 # signature (no runtime/entitlements) if ever needed for debugging.
 HARDENED   ?= 1
 ifeq ($(HARDENED),1)
-RUNTIME_ARGS := -o runtime --entitlements packaging/Parfait.entitlements
+RUNTIME_ARGS := -o runtime --entitlements packaging/Nutola.entitlements
 else
 RUNTIME_ARGS :=
 endif
 
-.PHONY: build test app run install relaunch app-icon nav-icon og clean
+.PHONY: build test app run install relaunch app-icon nav-icon clean
 
 build:
 	swift build -c release
@@ -66,23 +66,14 @@ relaunch:
 # Regenerate the nav-bar template glyphs loaded via Bundle.module.
 nav-icon:
 	swift scripts/MakeIcon.swift Resources menu
-	cp Resources/NavIcon.png Resources/NavIcon@2x.png Sources/Parfait/Resources/
+	cp Resources/NavIcon.png Resources/NavIcon@2x.png Sources/Nutola/Resources/
 	rm -f Resources/NavIcon.png Resources/NavIcon@2x.png Resources/NavIcon-preview.png
 
-# Regenerate the app icon from Resources/AppIcon.svg: .icns, 1024 master,
-# site icon/favicon, and og-image.png.
+# Regenerate the app icon from Resources/AppIcon.svg: .icns and 1024 master.
 app-icon:
-	swift scripts/MakeIcon.swift Resources site app
+	swift scripts/MakeIcon.swift Resources app
 	iconutil -c icns Resources/AppIcon.iconset -o Resources/AppIcon.icns
 	rm -rf Resources/AppIcon.iconset
-	$(MAKE) og
-
-# Regenerate the parfait.to Open Graph preview image (site/og-image.png)
-# from the drawing code, reusing the shipped 1024px app icon.
-og:
-	mkdir -p site
-	swiftc -O -framework AppKit -framework CoreText -framework CoreGraphics -framework Foundation -framework ImageIO -framework UniformTypeIdentifiers scripts/MakeOGImage.swift -o .build/MakeOGImage
-	.build/MakeOGImage Resources/AppIcon-1024.png site
 
 clean:
 	rm -rf .build "$(DIST)"

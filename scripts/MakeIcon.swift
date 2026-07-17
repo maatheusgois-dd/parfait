@@ -1,6 +1,6 @@
-// Generates the Parfait app icon (all AppIcon.iconset sizes + 1024 master),
-// nav-bar template icons, and site PNGs from Resources/AppIcon.svg.
-// Run: swift scripts/MakeIcon.swift <outdir> [siteDir]
+// Generates the Nutola app icon (all AppIcon.iconset sizes + 1024 master) and
+// nav-bar template icons from Resources/AppIcon.svg.
+// Run: swift scripts/MakeIcon.swift <outdir> [app|menu|all]
 import Foundation
 import CoreGraphics
 import ImageIO
@@ -64,7 +64,7 @@ func writePNG(_ ctx: CGContext, to url: URL) {
 }
 
 /// Cup mask from Resources/AppIcon.svg (clips the stripe fills).
-func parfaitIconCupPath() -> CGPath {
+func nutolaIconCupPath() -> CGPath {
     let p = CGMutablePath()
     p.move(to: CGPoint(x: 100.857, y: 42))
     p.addLine(to: CGPoint(x: 219.357, y: 42))
@@ -92,7 +92,7 @@ func parfaitIconCupPath() -> CGPath {
 }
 
 /// Stroke outline from Resources/AppIcon.svg (separate path, stroke-width 4).
-func parfaitIconStrokePath() -> CGPath {
+func nutolaIconStrokePath() -> CGPath {
     let p = CGMutablePath()
     p.move(to: CGPoint(x: 219.357, y: 40))
     p.addCurve(to: CGPoint(x: 244.712, y: 50.502),
@@ -121,7 +121,7 @@ func parfaitIconStrokePath() -> CGPath {
 }
 
 /// Cup silhouette from Resources/NavIcon.svg (44×56).
-func parfaitMenuCupPath() -> CGPath {
+func nutolaMenuCupPath() -> CGPath {
     let p = CGMutablePath()
     p.move(to: CGPoint(x: 10.5455, y: 8))
     p.addLine(to: CGPoint(x: 33.4545, y: 8))
@@ -167,7 +167,7 @@ func drawAppIcon(in ctx: CGContext, px: Int) {
     ctx.translateBy(x: 0, y: CGFloat(px))
     ctx.scaleBy(x: scale, y: -scale)
 
-    let cup = parfaitIconCupPath()
+    let cup = nutolaIconCupPath()
     ctx.addPath(cup)
     ctx.clip()
 
@@ -182,7 +182,7 @@ func drawAppIcon(in ctx: CGContext, px: Int) {
     ctx.scaleBy(x: scale, y: -scale)
     ctx.setStrokeColor(srgb(67, 50, 43, 0.12))
     ctx.setLineWidth(4)
-    ctx.addPath(parfaitIconStrokePath())
+    ctx.addPath(nutolaIconStrokePath())
     ctx.strokePath()
     ctx.restoreGState()
 }
@@ -196,7 +196,7 @@ func drawMenuGlyph(in ctx: CGContext, px: Int) {
     ctx.translateBy(x: offsetX, y: CGFloat(px))
     ctx.scaleBy(x: scale, y: -scale)
 
-    let cup = parfaitMenuCupPath()
+    let cup = nutolaMenuCupPath()
     ctx.addPath(cup)
     ctx.clip()
 
@@ -215,21 +215,18 @@ enum IconMode: String {
 
 let args = CommandLine.arguments
 guard args.count >= 2 else {
-    fputs("usage: swift MakeIcon.swift <outdir> [siteDir] [app|menu|all]\n", stderr)
+    fputs("usage: swift MakeIcon.swift <outdir> [app|menu|all]\n", stderr)
     exit(1)
 }
 
 let outDir = URL(fileURLWithPath: args[1], isDirectory: true)
-var siteDir: URL?
 var mode: IconMode = .all
 
 for arg in args.dropFirst(2) {
     if let parsed = IconMode(rawValue: arg) {
         mode = parsed
-    } else if siteDir == nil {
-        siteDir = URL(fileURLWithPath: arg, isDirectory: true)
     } else {
-        fputs("usage: swift MakeIcon.swift <outdir> [siteDir] [app|menu|all]\n", stderr)
+        fputs("usage: swift MakeIcon.swift <outdir> [app|menu|all]\n", stderr)
         exit(1)
     }
 }
@@ -263,11 +260,6 @@ if mode == .all || mode == .app {
     }
     renderAppIcon(1024, to: outDir.appendingPathComponent("AppIcon-1024.png"))
 
-    if let siteDir {
-        try FileManager.default.createDirectory(at: siteDir, withIntermediateDirectories: true)
-        renderAppIcon(256, to: siteDir.appendingPathComponent("icon.png"))
-        renderAppIcon(32, to: siteDir.appendingPathComponent("favicon.png"))
-    }
 }
 
 if mode == .all || mode == .menu {
@@ -277,6 +269,3 @@ if mode == .all || mode == .menu {
 }
 
 print("wrote \(mode.rawValue) icons to \(outDir.path)")
-if let siteDir, mode == .all || mode == .app {
-    print("wrote site icons to \(siteDir.path)")
-}

@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "Parfait",
+    name: "Nutola",
     defaultLocalization: "en",
     platforms: [.macOS(.v26)],
     dependencies: [
@@ -10,16 +10,16 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "Parfait",
+            name: "Nutola",
             dependencies: [.product(name: "FluidAudio", package: "FluidAudio")],
-            path: "Sources/Parfait",
+            path: "Sources/Nutola",
             resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
-            name: "ParfaitTests",
-            dependencies: ["Parfait"],
-            path: "Tests/ParfaitTests",
+            name: "NutolaTests",
+            dependencies: ["Nutola"],
+            path: "Tests/NutolaTests",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

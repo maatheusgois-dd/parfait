@@ -1,18 +1,18 @@
-// notes.parfait.to render Worker
+// notes.nutola.to render Worker
 //
 // Plain modern JavaScript ES module. No TypeScript, no build step, no
-// dependencies. See docs/plans/2026-07-09-parfait-to-notes-cdn.md (the
+// dependencies. See docs/plans/2026-07-09-nutola-to-notes-cdn.md (the
 // "Synthesis notes" blockquote at the top overrides the body) for the
 // authoritative spec this implements.
 //
 // NOTE (2026-07-09): the public URL scheme was changed from the doc's
 // /user/gistId/raw/sha/file.html path to a single opaque base64url token
-// (see parsePath + Sources/Parfait/Publish/GistLinkToken.swift) so the link
+// (see parsePath + Sources/Nutola/Publish/GistLinkToken.swift) so the link
 // no longer exposes the GitHub username or gist path. The upstream fetch,
 // validation, and caching are otherwise unchanged.
 
-// The public URL is a single opaque base64url token the Parfait app produces
-// (Sources/Parfait/Publish/GistLinkToken.swift). It packs the gist coordinates
+// The public URL is a single opaque base64url token the Nutola app produces
+// (Sources/Nutola/Publish/GistLinkToken.swift). It packs the gist coordinates
 // so the GitHub username and gist path never appear in the link. We decode it
 // back to (user, gist id, commit SHA) and reattach the constant filename before
 // fetching upstream. Byte layout: [1B user length][user][gist-id bytes][20B SHA]
@@ -25,9 +25,9 @@ const SHA_REGEX = /^[0-9a-f]{40}$/;
 
 const SIZE_CAP_BYTES = 2 * 1024 * 1024; // 2 MiB
 
-const GENERATOR_MARKER = '<meta name="generator" content="parfait/1">';
+const GENERATOR_MARKER = '<meta name="generator" content="nutola/1">';
 
-// Tag-opener substrings that are never legitimate in a Parfait export, since
+// Tag-opener substrings that are never legitimate in a Nutola export, since
 // HTMLExporter escapes `<` in all user-derived text (transcript, notes).
 // Deliberately NOT bare substrings like "javascript:" or "http-equiv" alone
 // (see synthesis note: those occur legitimately as plain transcript text,
@@ -134,7 +134,7 @@ export function hasGeneratorMarker(lowerBody) {
  * truncation bypasses — `<meta content=">" http-equiv=…>` (early `>`) and
  * `<meta data-x="<" http-equiv=…>` (early `<`). Attribute names are literal in
  * HTML (no entity encoding), so a substring test for `http-equiv` on the
- * correctly-delimited, already-lowercased span is exact. A legitimate Parfait
+ * correctly-delimited, already-lowercased span is exact. A legitimate Nutola
  * export's four <meta> tags (charset, viewport, color-scheme, generator) never
  * carry http-equiv.
  */
@@ -332,7 +332,7 @@ function finalizeForMethod(response, method) {
 }
 
 function buildCacheKey(user, gistId, sha, filename) {
-  return new Request(`https://notes.parfait.to/${user}/${gistId}/raw/${sha}/${filename}`, {
+  return new Request(`https://notes.nutola.to/${user}/${gistId}/raw/${sha}/${filename}`, {
     method: 'GET',
   });
 }
@@ -348,7 +348,7 @@ export default {
       // max-age is a client-side hint only; these garbage-path responses are
       // deliberately NOT written to the edge cache (that would let random paths
       // fill it with unbounded-cardinality junk). The WAF rate-limit rule on
-      // notes.parfait.to/* is the real scanner-flood brake — see docs/DEPLOY.md.
+      // notes.nutola.to/* is the real scanner-flood brake — see docs/DEPLOY.md.
       return finalizeForMethod(plainResponse(400, 'Bad Request', 60), request.method);
     }
 
@@ -410,7 +410,7 @@ export default {
     const lower = text.toLowerCase();
 
     if (!hasGeneratorMarker(lower)) {
-      const res = plainResponse(403, 'Not a Parfait export', 300);
+      const res = plainResponse(403, 'Not a Nutola export', 300);
       ctx.waitUntil(cache.put(cacheKey, res.clone()));
       return finalizeForMethod(res, request.method);
     }

@@ -22,7 +22,7 @@ const SHA_40 = 'c'.repeat(40);
 const FILENAME = 'meeting.html'; // constant; dropped from the token, reattached by the Worker
 
 // Mirror of the app's GistLinkToken encoder
-// (Sources/Parfait/Publish/GistLinkToken.swift):
+// (Sources/Nutola/Publish/GistLinkToken.swift):
 // [1B user length][user UTF-8][gist-id bytes][SHA bytes], base64url, no padding.
 // Deliberately does NO validation, so tests can craft malformed tokens.
 function encodeToken(user, gist, sha) {
@@ -42,7 +42,7 @@ function pathFor(user, gist, sha, _filename) {
   return `/${encodeToken(user, gist, sha)}`;
 }
 
-const GENERATOR_META = '<meta name="generator" content="parfait/1">';
+const GENERATOR_META = '<meta name="generator" content="nutola/1">';
 
 function realisticDoc({ generator = GENERATOR_META, extra = '' } = {}) {
   return `<!doctype html>
@@ -159,7 +159,7 @@ function installFetchStub(impl) {
 }
 
 function makeRequest(pathname, { method = 'GET', search = '' } = {}) {
-  return new Request(`https://notes.parfait.to${pathname}${search}`, { method });
+  return new Request(`https://notes.nutola.to${pathname}${search}`, { method });
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +183,7 @@ describe('parsePath — accept', () => {
   });
 
   // Cross-language wire-format lock: these exact tokens are the goldens in
-  // Tests/ParfaitTests/GitHubGistTests.swift. If the app's encoder changes,
+  // Tests/NutolaTests/GitHubGistTests.swift. If the app's encoder changes,
   // both must change together.
   test('decodes the app golden 32-hex token', () => {
     assert.deepEqual(
@@ -262,7 +262,7 @@ describe('hasGeneratorMarker', () => {
   });
 
   test('uppercase marker variant passes (case-insensitive)', () => {
-    const doc = realisticDoc({ generator: '<META NAME="GENERATOR" CONTENT="PARFAIT/1">' });
+    const doc = realisticDoc({ generator: '<META NAME="GENERATOR" CONTENT="NUTOLA/1">' });
     assert.equal(hasGeneratorMarker(doc.toLowerCase()), true);
   });
 });
@@ -381,7 +381,7 @@ describe('handler', () => {
     restoreFetch();
 
     assert.equal(res.status, 200);
-    const expectedKey = `https://notes.parfait.to/${USER}/${GIST_32}/raw/${SHA_40}/${FILENAME}`;
+    const expectedKey = `https://notes.nutola.to/${USER}/${GIST_32}/raw/${SHA_40}/${FILENAME}`;
     assert.ok(cache.store.has(expectedKey), 'cache key must use the lowercased user segment');
   });
 
@@ -404,7 +404,7 @@ describe('handler', () => {
   });
 
   test('marker gate: UPPERCASE marker variant passes', async () => {
-    const doc = realisticDoc({ generator: '<META NAME="GENERATOR" CONTENT="PARFAIT/1">' });
+    const doc = realisticDoc({ generator: '<META NAME="GENERATOR" CONTENT="NUTOLA/1">' });
     restoreFetch = installFetchStub(async () => fakeUpstream(200, doc));
     const { ctx } = makeCtx();
     const req = makeRequest(pathFor(USER, GIST_32, SHA_40, FILENAME));

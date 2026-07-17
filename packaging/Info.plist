@@ -9,15 +9,15 @@
 		<string>en</string>
 	</array>
 	<key>CFBundleExecutable</key>
-	<string>Parfait</string>
+	<string>Nutola</string>
 	<key>CFBundleIdentifier</key>
-	<string>io.github.conrad-vanl.Parfait</string>
+	<string>io.github.matheusgois-dd.Nutola</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Parfait</string>
+	<string>Nutola</string>
 	<key>CFBundleDisplayName</key>
-	<string>Parfait</string>
+	<string>Nutola</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -35,10 +35,10 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT License</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Parfait records your side of meetings so it can transcribe and summarize them — entirely on this Mac.</string>
+	<string>Nutola records your side of meetings so it can transcribe and summarize them — entirely on this Mac.</string>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>Parfait records the other participants' audio during meetings so both sides of the conversation appear in your transcript.</string>
+	<string>Nutola records the other participants' audio during meetings so both sides of the conversation appear in your transcript.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Parfait matches recordings to your calendar to name meetings and suggest attendee names. Optional.</string>
+	<string>Nutola matches recordings to your calendar to name meetings and suggest attendee names. Optional.</string>
 </dict>
 </plist>

@@ -1,0 +1,41 @@
+// Nutola base English strings.
+//
+// SwiftUI Text("…") / Label("…", systemImage:) / .accessibilityLabel("…")
+// resolve against this file automatically when the argument is a
+// LocalizedStringKey (string literals are). Add a locale by creating
+// <locale>.lproj/Localizable.strings (e.g. pt.lproj) alongside this one;
+// no code changes needed.
+
+// MARK: - Transcript
+
+"Rename this speaker everywhere" = "Rename this speaker everywhere";
+"Rename this speaker everywhere in this meeting" = "Rename this speaker everywhere in this meeting";
+"Listening…" = "Listening…";
+"The live transcript appears here as people speak." = "The live transcript appears here as people speak.";
+"Listening. The live transcript appears here as people speak." = "Listening. The live transcript appears here as people speak.";
+"Live, not yet finalized: %@" = "Live, not yet finalized: %@";
+"%@ at %@" = "%1$@ at %2$@";
+
+// MARK: - Live recording card
+
+"Stop" = "Stop";
+"Stop recording" = "Stop recording";
+"Stops the recording and finalizes the transcript" = "Stops the recording and finalizes the transcript";
+"Live — transcribing as the meeting happens. The final, more accurate transcript is created when you stop." = "Live — transcribing as the meeting happens. The final, more accurate transcript is created when you stop.";
+"Live — new audio appends to the existing transcript when you stop." = "Live — new audio appends to the existing transcript when you stop.";
+
+// MARK: - Transcription settings
+
+"Speech recognition" = "Speech recognition";
+"Transcription engine" = "Transcription engine";
+"This engine isn't wired up yet — Nutola transcribes with Apple Speech until it ships. You can't download or select it today." = "This engine isn't wired up yet — Nutola transcribes with Apple Speech until it ships. You can't download or select it today.";
+"Mode: live during meetings" = "Mode: live during meetings";
+"Mode: batch after recording" = "Mode: batch after recording";
+"Apple Speech" = "Apple Speech";
+
+// MARK: - Settings (General)
+
+"Developer mode" = "Developer mode";
+"Shows a Debug tab with diagnostics and experimental options." = "Shows a Debug tab with diagnostics and experimental options.";
+"Save a crash diagnostic on crash" = "Save a crash diagnostic on crash";
+"When Nutola crashes, writes a small scrubbed record (version, OS, signal, and the in-flight meeting's title and state — never audio, transcript, or notes) to ~/Library/Application Support/Nutola/diagnostics.json so you can attach it to a bug report. Off by default." = "When Nutola crashes, writes a small scrubbed record (version, OS, signal, and the in-flight meeting's title and state — never audio, transcript, or notes) to ~/Library/Application Support/Nutola/diagnostics.json so you can attach it to a bug report. Off by default.";

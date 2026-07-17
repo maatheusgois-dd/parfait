@@ -1,13 +1,13 @@
-name = "parfait-notes-proxy"
+name = "nutola-notes-proxy"
 main = "src/index.js"
 compatibility_date = "2026-07-09"
 
 # Custom Domain (not a zone route): `wrangler deploy` provisions the DNS record
-# AND the TLS certificate for notes.parfait.to automatically. A plain
+# AND the TLS certificate for notes.nutola.to automatically. A plain
 # `zone_name` route would deploy fine but silently 404 (ERR_NAME_NOT_RESOLVED)
 # until a proxied DNS record was added by hand — custom_domain avoids that.
 routes = [
-  { pattern = "notes.parfait.to", custom_domain = true }
+  { pattern = "notes.nutola.to", custom_domain = true }
 ]
 
 # Phase 2: KV namespace for the blocklist. Ships with an empty/inert

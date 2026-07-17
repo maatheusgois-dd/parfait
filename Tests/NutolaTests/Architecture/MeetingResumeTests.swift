@@ -33,17 +33,26 @@ final class MeetingResumeTests: XCTestCase {
         XCTAssertEqual(match?.id, longest.id)
     }
 
-    func testCanResumeRecordingIncludesReadyAndPrep() {
+    func testCanResumeRecordingIncludesReadyPrepAndProcessingOrphan() {
         var prep = Meeting(title: "Prep", createdAt: Date())
         prep.state = .prep
         var ready = Meeting(title: "Ready", createdAt: Date())
         ready.state = .ready
         var recording = Meeting(title: "Recording", createdAt: Date())
         recording.state = .recording
+        // A crash-orphan being finalized has no live RecordingSession, so a
+        // detection-driven start on the same launch must be able to resume it
+        // instead of creating a duplicate meeting for the same calendar event.
+        var processingOrphan = Meeting(title: "Finalizing", createdAt: Date())
+        processingOrphan.state = .processing
 
         XCTAssertTrue(prep.canResumeRecording(isRecording: false))
         XCTAssertTrue(ready.canResumeRecording(isRecording: false))
         XCTAssertFalse(recording.canResumeRecording(isRecording: false))
+        XCTAssertTrue(processingOrphan.canResumeRecording(isRecording: false))
+        // Never resumable while a session is actually live.
+        XCTAssertFalse(processingOrphan.canResumeRecording(isRecording: true))
+        XCTAssertFalse(ready.canResumeRecording(isRecording: true))
     }
 
     func testProcessMeetingSkipsWhenRecordingResumed() async {

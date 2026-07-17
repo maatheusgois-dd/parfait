@@ -93,8 +93,13 @@ extension Meeting {
 
     func canContinueRecording(isRecording: Bool) -> Bool {
         guard !isRecording else { return false }
-        guard state != .recording, state != .processing, state != .prep else { return false }
-        return state == .failed || state == .ready
+        // .recording/.prep are genuinely live or staged starts — never auto-resume.
+        // .processing is an orphan being finalized by finalizeOrphans (no live
+        // RecordingSession holds it); treat it as resumable so a detection-driven
+        // start on the same launch rejoins the same calendar meeting instead of
+        // creating a duplicate. The resume path cancels the orphan's process task.
+        guard state != .recording, state != .prep else { return false }
+        return state == .failed || state == .ready || state == .processing
     }
 
     /// Whether auto-detection should append to this meeting instead of creating a new one.

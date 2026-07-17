@@ -23,13 +23,22 @@ final class RecordingServiceImpl: RecordingService {
         settings: SettingsRepository
     ) async -> Result<RecordingSessionHandle, RecordingError> {
         guard !isRecording, !isStartingRecording else { return .failure(.alreadyRecording) }
-        _isStartingRecording = true
-        defer { _isStartingRecording = false }
         NutolaConsoleLog.recording("start requested source=\(sourceApp ?? "manual") calendar=\(calendarEvent?.title ?? "none")")
 
         if !MicRecorder.permissionGranted {
             let granted = await MicRecorder.requestPermission()
             NutolaConsoleLog.recording("mic permission requested granted=\(granted) status=\(MicRecorder.permissionGranted)")
+            if !granted {
+                // The TCC prompt was denied or didn't appear (common with ad-hoc
+                // signed apps after a rebuild — macOS silently denies). Open
+                // System Settings so the user can toggle it manually.
+                NutolaConsoleLog.recording("mic permission DENIED — opening System Settings → Microphone")
+                await MainActor.run {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
         }
         let sysBefore = SystemAudioPermission.statusLabel
         if SystemAudioPermission.status() == .unknown {
@@ -43,13 +52,34 @@ final class RecordingServiceImpl: RecordingService {
             calendarRepository: calendarRepository,
             settings: settings)
 
+        // Resume an existing meeting for this calendar event (e.g. re-joining a call
+        // after a crash). Delegate to continueRecording WITHOUT holding the
+        // _isStartingRecording flag — continueRecording manages its own, and its
+        // `!isStartingRecording` guard would otherwise reject us with
+        // .alreadyRecording, leaving the orphan un-resumable through this path.
         if let event = resolvedCalendarEvent,
            let existing = calendarRepository.meetingForCalendarEvent(
                event, in: meetingRepository.meetings),
            existing.canResumeRecording(isRecording: false) {
             NutolaConsoleLog.recording("resuming existing meeting for calendar event \"\(event.title)\"")
+            // A crash-orphan may have been created before the source was known
+            // (sourceApp == nil), which stops the Zoom speaker tracker from
+            // starting on resume — so the live UI gets no named speakers and
+            // the final transcript has no roster. Update it to the source we
+            // just detected (e.g. Zoom) so the tracker starts on the resumed call.
+            if let sourceApp, existing.sourceApp == nil {
+                var updated = existing
+                updated.sourceApp = sourceApp
+                meetingRepository.upsert(updated)
+                NutolaConsoleLog.recording("resume: set source=\(sourceApp) on orphan \(existing.id.uuidString.prefix(8))")
+            }
             return await continueRecording(meetingID: existing.id, meetingRepository: meetingRepository)
         }
+
+        // Fresh start: claim the flag only now, after the resume branch. The
+        // resume path above owns its own flag lifecycle.
+        _isStartingRecording = true
+        defer { _isStartingRecording = false }
 
         var meeting = Meeting(title: Meeting.placeholderTitle(for: Date()), createdAt: Date())
         meeting.sourceApp = sourceApp
@@ -87,20 +117,12 @@ final class RecordingServiceImpl: RecordingService {
         }
         NutolaConsoleLog.recording("continue \(meetingID.uuidString.prefix(8)) fromPrep=\(fromPrep) duration=\(Int(meeting.duration))s")
 
-        _isStartingRecording = true
-        defer { _isStartingRecording = false }
-
-        if !MicRecorder.permissionGranted {
-            let granted = await MicRecorder.requestPermission()
-            NutolaConsoleLog.recording("mic permission requested granted=\(granted) status=\(MicRecorder.permissionGranted)")
-        }
-        let sysBefore = SystemAudioPermission.statusLabel
-        if SystemAudioPermission.status() == .unknown {
-            await SystemAudioPermission.request()
-        }
-        NutolaConsoleLog.recording("permissions mic=\(MicRecorder.permissionGranted) system=\(SystemAudioPermission.statusLabel) (was \(sysBefore))")
-        guard !isRecording else { return .failure(.alreadyRecording) }
-
+        // Claim the meeting and reset its files SYNCHRONOUSLY, before the async
+        // permission awaits below. A late orphan-finalization task (cancel is
+        // cooperative, so process() may still be mid-flight) reads the meeting
+        // fresh and bails on `guard fresh.state == .processing` once we've flipped
+        // to .recording — so flip first. This also reclaims the audio/transcript
+        // files before process() can write them.
         let archive = meetingRepository.archive
         if !fromPrep {
             for url in [archive.micURL(for: meetingID), archive.systemURL(for: meetingID)] {
@@ -110,10 +132,31 @@ final class RecordingServiceImpl: RecordingService {
             archive.removePlatformSpeakerEvents(for: meetingID)
             archive.removeZoomRoster(for: meetingID)
         }
-
         meeting.state = .recording
         meeting.notice = nil
         meetingRepository.upsert(meeting)
+
+        _isStartingRecording = true
+        defer { _isStartingRecording = false }
+
+        if !MicRecorder.permissionGranted {
+            let granted = await MicRecorder.requestPermission()
+            NutolaConsoleLog.recording("mic permission requested granted=\(granted) status=\(MicRecorder.permissionGranted)")
+            if !granted {
+                NutolaConsoleLog.recording("mic permission DENIED — opening System Settings → Microphone")
+                await MainActor.run {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
+        }
+        let sysBefore = SystemAudioPermission.statusLabel
+        if SystemAudioPermission.status() == .unknown {
+            await SystemAudioPermission.request()
+        }
+        NutolaConsoleLog.recording("permissions mic=\(MicRecorder.permissionGranted) system=\(SystemAudioPermission.statusLabel) (was \(sysBefore))")
+        guard !isRecording else { return .failure(.alreadyRecording) }
 
         let newSession = RecordingSession(
             meetingID: meeting.id,

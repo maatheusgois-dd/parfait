@@ -25,6 +25,9 @@ final class RecordingSession: ObservableObject {
     @Published private(set) var liveRoster: [String] = []
     private(set) var micStarted = false
     private(set) var systemStarted = false
+    /// True when the local participant is muted in Zoom — the mic buffer sink is
+    /// disconnected so no silent buffers reach the live transcriber or the .m4a file.
+    private var micPaused = false
 
     private let mic = MicRecorder()
     private let tap = SystemAudioTap()
@@ -89,20 +92,17 @@ final class RecordingSession: ObservableObject {
             Task { @MainActor in self?.micBarLevels = levels }
         }
         mic.bufferSink = { [weak live] buffer in live?.feedMic(buffer) }
-        do {
-            try mic.start(writingTo: micURL)
-            micStarted = true
-        } catch {
-            let ns = error as NSError
-            NutolaConsoleLog.recording(
-                "mic start failed domain=\(ns.domain) code=\(ns.code) — \(error.localizedDescription)")
-            problems.append("microphone: \(error.localizedDescription)")
-        }
         tap.signalDetectedHandler = {
             AppSettings.markSystemAudioConfirmed()
             NutolaConsoleLog.recording("system audio confirmed — non-silent signal received")
         }
         tap.bufferSink = { [weak live] buffer in live?.feedSystem(buffer) }
+        // Start the system audio tap FIRST. It creates a Core Audio aggregate
+        // device (AudioHardwareCreateAggregateDevice) which can disrupt an
+        // already-running AVAudioEngine's input node — the engine's input route
+        // becomes stale and no buffers arrive. Starting the tap first means the
+        // aggregate device exists before the mic engine starts, so the engine
+        // binds to the correct input device.
         do {
             try tap.start(writingTo: systemURL)
             systemStarted = true
@@ -112,6 +112,15 @@ final class RecordingSession: ObservableObject {
             NutolaConsoleLog.recording(
                 "system tap start failed domain=\(ns.domain) code=\(ns.code) — \(error.localizedDescription)")
             problems.append("system audio: \(error.localizedDescription)")
+        }
+        do {
+            try mic.start(writingTo: micURL)
+            micStarted = true
+        } catch {
+            let ns = error as NSError
+            NutolaConsoleLog.recording(
+                "mic start failed domain=\(ns.domain) code=\(ns.code) — \(error.localizedDescription)")
+            problems.append("microphone: \(error.localizedDescription)")
         }
         guard micStarted || systemStarted else {
             NutolaConsoleLog.recording("failed to start — \(problems.joined(separator: "; "))")
@@ -283,6 +292,19 @@ final class RecordingSession: ObservableObject {
         tracker.onActiveSpeaker = { [weak self] name in
             NutolaConsoleLog.zoom("UI activeRemoteSpeaker=\(name ?? "nil")")
             self?.activeRemoteSpeaker = name
+        }
+        tracker.onLocalMuteChanged = { [weak self] muted in
+            guard let self else { return }
+            self.micPaused = muted
+            if muted {
+                NutolaConsoleLog.zoom("mic paused — local participant muted in Zoom")
+                self.mic.bufferSink = nil
+            } else {
+                NutolaConsoleLog.zoom("mic resumed — local participant unmuted in Zoom")
+                if let live = self.liveTranscriber {
+                    self.mic.bufferSink = { buffer in live.feedMic(buffer) }
+                }
+            }
         }
         // Poll the tracker's roster for the live UI (participant names).
         let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in

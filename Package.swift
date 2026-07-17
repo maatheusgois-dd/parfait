@@ -29,6 +29,11 @@ let package = Package(
             resources: [.process("Resources")],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        .executableTarget(
+            name: "zoom-info",
+            path: "Sources/ZoomInfo",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .testTarget(
             name: "NutolaTests",
             dependencies: ["Nutola"],

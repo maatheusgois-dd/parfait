@@ -12,7 +12,7 @@ final class CalendarStore: ObservableObject {
     @Published private(set) var lastRefresh: Date?
     @Published private(set) var fetchHorizonDays = defaultFetchHorizonDays
 
-    private let eventStore = EKEventStore()
+    private var eventStore: EKEventStore = EKEventStore()
     private var observers: [NSObjectProtocol] = []
     private var debounceTask: Task<Void, Never>?
     private var ticker: Timer?
@@ -31,6 +31,21 @@ final class CalendarStore: ObservableObject {
             NotificationCenter.default.removeObserver(observer)
         }
         ticker?.invalidate()
+    }
+
+    /// Recreate the EKEventStore after calendar access is granted. The store
+    /// created at init (before authorization) won't see events post-grant until
+    /// it's reset — that's why the first refresh after granting returns 0 events
+    /// even though `authorizationStatus` reads `.fullAccess`. Also handles the
+    /// `authorizationStatus` propagation lag: the static status can flap between
+    /// `.notDetermined` and `.fullAccess` right after the TCC grant.
+    func resetEventStoreAfterGrant() async {
+        for _ in 0..<5 where !CalendarAuthorization.isAuthorized {
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        guard CalendarAuthorization.isAuthorized else { return }
+        eventStore = EKEventStore()
+        await refreshAgenda()
     }
 
     func refreshAgenda(
@@ -164,7 +179,10 @@ final class CalendarStore: ObservableObject {
         observers.append(NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in await self?.refreshAgenda() }
+            // Debounced: UserDefaults fires on every defaults write (toggling a
+            // setting can fire dozens of times), so coalesce into a single refresh
+            // 2s later rather than hammering EventKit on each change.
+            Task { @MainActor in self?.scheduleRefresh() }
         })
     }
 

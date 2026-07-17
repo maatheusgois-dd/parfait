@@ -53,6 +53,21 @@ final class AppState: NSObject, ObservableObject {
 
     var isRecording: Bool { session != nil || container.recordingService.isRecording }
 
+    /// A meeting left in a resumable state (failed/ready/prep) when no session is
+    /// active — e.g. a crash-orphaned recording the user is about to rejoin. The
+    /// menu bar uses this to swap "Start recording" for "Resume recording".
+    var resumableMeeting: Meeting? {
+        guard session == nil, !container.recordingService.isRecording else { return nil }
+        return store.meetings.first { $0.canResumeRecording(isRecording: false) }
+    }
+
+    /// Resume the most recent resumable meeting, if any. Used by the menu bar's
+    /// "Resume recording" button when no session is live.
+    func resumeOrphanIfAny() async {
+        guard let meeting = resumableMeeting else { return }
+        await continueRecording(meetingID: meeting.id)
+    }
+
     private init(container: DependencyContainer) {
         self.container = container
         showLiveRecordingCard = container.settings.showLiveRecordingCard
@@ -294,6 +309,10 @@ final class AppState: NSObject, ObservableObject {
         lastError = nil
         resetRecordingCardState()
         container.detectionCoordinator.dismissDetection()
+        // If this meeting is mid-finalization (orphan resumed on the same launch
+        // that's finalizing it), cancel the process task so its audio/transcript
+        // files can be safely reset for the resumed recording.
+        cancelOrphanProcessing(meetingID)
         switch await container.continueRecording.execute(meetingID: meetingID) {
         case .success(let handle):
             applyRecordingHandle(handle)
@@ -345,6 +364,12 @@ final class AppState: NSObject, ObservableObject {
         }
     }
 
+    /// In-flight orphan-finalization tasks, keyed by meeting ID. When a detection-
+    /// driven startRecording races finalizeOrphans on the same launch and resumes
+    /// the orphan, we cancel its process task so the audio/transcript files can be
+    /// safely reset for the resumed recording without a write/read collision.
+    private var orphanProcessTasks: [UUID: Task<Void, Never>] = [:]
+
     private func finalizeOrphans() {
         let orphans = store.meetings.filter { $0.state == .recording || $0.state == .processing }
         if !orphans.isEmpty {
@@ -352,12 +377,30 @@ final class AppState: NSObject, ObservableObject {
         }
         for meeting in orphans {
             var m = meeting
+            // Flip to .processing SYNCHRONOUSLY, before the async process task, so a
+            // detection-driven startRecording that races on the same launch can't
+            // see the orphan still in .recording and create a duplicate meeting for
+            // the same calendar event. .processing is not a live session — no
+            // RecordingSession holds it — so the resume matcher (which treats
+            // .processing as resumable when no session is live) can rejoin it.
+            m.state = .processing
             if m.duration == 0 {
                 m.duration = audioDuration(archive: store.archive, id: m.id)
-                store.upsert(m)
             }
-            Task { await process(m) }
+            store.upsert(m)
+            let task = Task { await process(m) }
+            orphanProcessTasks[m.id] = task
+            Task { @MainActor in
+                await task.value
+                orphanProcessTasks[m.id] = nil
+            }
         }
+    }
+
+    /// Cancel the orphan-finalization task for a meeting (e.g. when resuming it).
+    func cancelOrphanProcessing(_ meetingID: UUID) {
+        orphanProcessTasks[meetingID]?.cancel()
+        orphanProcessTasks[meetingID] = nil
     }
 
     private nonisolated func audioDuration(archive: MeetingArchive, id: UUID) -> TimeInterval {

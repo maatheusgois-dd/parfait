@@ -1,6 +1,6 @@
+import Foundation
 import AppKit
 import ApplicationServices
-import Foundation
 
 /// Polls the installed Zoom Workplace client during recording and logs who the
 /// meeting UI marks as speaking. Events are written to `speaker_events.json`
@@ -21,9 +21,15 @@ final class ZoomSpeakerTracker: PlatformSpeakerTracker, @unchecked Sendable {
     private var lastSummary = Date.distantPast
     private var lastCaptionKey: String?
     private var lastRoster: [String] = []
+    private var rosterPersisted = false
+    private var lastLocalMuted: Bool?
 
-    /// Called on the main queue whenever the active remote speaker changes.
-    var onActiveSpeaker: (@MainActor (String?) -> Void)?
+    /// Called on the main queue when the local participant's Zoom mute state changes.
+    /// True = muted in Zoom (don't capture mic), false = unmuted (capture mic).
+    var onLocalMuteChanged: (@MainActor (Bool) -> Void)?
+
+     /// Called on the main queue whenever the active remote speaker changes.
+     var onActiveSpeaker: (@MainActor (String?) -> Void)?
     /// Thread-safe snapshot of the active speaker name at a given elapsed time.
     /// Called from the LiveTranscriber's handle() to attribute system-audio
     /// segments to the Zoom-reported speaker instead of generic "Others".
@@ -87,6 +93,14 @@ final class ZoomSpeakerTracker: PlatformSpeakerTracker, @unchecked Sendable {
             self.timer = nil
             self.closeOpen(until: self.now)
             self.persist(force: true)
+            // Always persist the final roster so the batch pipeline can attribute
+            // speaker names even if the roster never changed during the call
+            // (the tick() save is gated on roster change, which never fires for
+            // a stable participant list — leaving no zoom_roster.json behind).
+            if !self.lastRoster.isEmpty {
+                self.archive.saveZoomRoster(self.lastRoster, for: self.meetingID)
+                NutolaConsoleLog.zoom("stop: persisted final roster (\(self.lastRoster.count) names)")
+            }
             let saved = PlatformSpeakerTurnBuilder.normalized(self.events)
             NutolaConsoleLog.zoom(
                 "stop ticks=\(self.tickCount) events=\(saved.count) saved=\(saved.map { "\($0.name) \(String(format: "%.1f", $0.start))-\(String(format: "%.1f", $0.end))" }.joined(separator: ", "))")
@@ -138,9 +152,26 @@ final class ZoomSpeakerTracker: PlatformSpeakerTracker, @unchecked Sendable {
             persist(force: false)
         }
 
-        if scan.roster != lastRoster {
+        // Persist the roster whenever it changes, OR on the first non-empty scan.
+        // When the scan returns empty (Zoom window temporarily not in the AX tree,
+        // e.g. another app frontmost, window redrawing), keep the last known roster
+        // rather than blanking it — the participants haven't actually left.
+        if scan.roster.isEmpty {
+            // Keep lastRoster; don't overwrite with empty.
+        } else if scan.roster != lastRoster || !rosterPersisted {
             lastRoster = scan.roster
             archive.saveZoomRoster(scan.roster, for: meetingID)
+            rosterPersisted = true
+        }
+
+        // Detect local participant's mute state change. When muted in Zoom,
+        // the mic should stop capturing (silence anyway) and live segments
+        // should not be attributed to "me". When unmuted, resume capturing.
+        if let muted = scan.localParticipantMuted, muted != lastLocalMuted {
+            lastLocalMuted = muted
+            NutolaConsoleLog.zoom("local participant \(muted ? "muted" : "unmuted") — \(muted ? "pausing mic capture" : "resuming mic capture")")
+            let cb = onLocalMuteChanged
+            DispatchQueue.main.async { cb?(muted) }
         }
 
         let now = Date()
@@ -223,6 +254,9 @@ enum ZoomActiveSpeakerReader {
         var active: [String]
         var activeSource: PlatformSpeakerSource
         var latestCaption: CaptionLine?
+        /// True when the local participant's Zoom tile says "Computer audio muted".
+        /// Nil when the local participant's tile wasn't found in this scan.
+        var localParticipantMuted: Bool?
     }
 
     private static let mainBundleID = "us.zoom.xos"
@@ -241,14 +275,14 @@ enum ZoomActiveSpeakerReader {
         guard AccessibilityPermission.isTrusted else {
             return ScanResult(
                 zoomPID: nil, roster: [], active: [], activeSource: .activeSpeaker,
-                latestCaption: nil)
+                latestCaption: nil, localParticipantMuted: nil)
         }
         guard let app = NSWorkspace.shared.runningApplications.first(where: {
             $0.bundleIdentifier == mainBundleID
         }) else {
             return ScanResult(
                 zoomPID: nil, roster: [], active: [], activeSource: .activeSpeaker,
-                latestCaption: nil)
+                latestCaption: nil, localParticipantMuted: nil)
         }
 
         let root = AXUIElementCreateApplication(app.processIdentifier)
@@ -257,22 +291,30 @@ enum ZoomActiveSpeakerReader {
         var activeLabels: [String] = []
         var selectedTiles: [String] = []
         var latestCaption: CaptionLine?
-        // Use kAXWindowsAttribute to get ALL windows, including those on other
-        // screens/Spaces. kAXChildrenAttribute on the app root may miss windows
-        // that aren't on the active Space or are on a secondary display.
-        let windows = allWindows(root)
-        if windows.isEmpty {
-            // Fallback: walk from the root if windows attribute is empty.
+        var localMuted: Bool?
+        // Strategy: try multiple AX entry points to find participant tiles.
+        // 1. kAXWindowsAttribute — all windows (works when on the active Space).
+        // 2. kAXFocusedWindowAttribute — the focused window (works even when on
+        //    another Space — kAXWindowsAttribute returns 0 for inactive Spaces,
+        //    but the focused window is still accessible with its full subtree).
+        // 3. kAXChildrenAttribute on root — last resort (usually just the menu bar).
+        var scannedWindows = allWindows(root)
+        if scannedWindows.isEmpty {
+            if let focused = focusedWindow(root) {
+                scannedWindows = [focused]
+            }
+        }
+        if scannedWindows.isEmpty {
             walk(
                 root, depth: 0, roster: &roster, activeTiles: &activeTiles,
                 activeLabels: &activeLabels, selectedTiles: &selectedTiles,
-                latestCaption: &latestCaption)
+                latestCaption: &latestCaption, localMuted: &localMuted)
         } else {
-            for window in windows {
+            for window in scannedWindows {
                 walk(
                     window, depth: 0, roster: &roster, activeTiles: &activeTiles,
                     activeLabels: &activeLabels, selectedTiles: &selectedTiles,
-                    latestCaption: &latestCaption)
+                    latestCaption: &latestCaption, localMuted: &localMuted)
             }
         }
         let rosterOut = deduped(roster)
@@ -295,7 +337,8 @@ enum ZoomActiveSpeakerReader {
             roster: rosterOut,
             active: deduped(activeOut).filter { !isLocalParticipant($0) },
             activeSource: source,
-            latestCaption: latestCaption)
+            latestCaption: latestCaption,
+            localParticipantMuted: localMuted)
     }
 
     /// Diagnostic: dumps the full Zoom AX tree (first ~500 elements) to the unified
@@ -376,7 +419,8 @@ enum ZoomActiveSpeakerReader {
         activeTiles: inout [String],
         activeLabels: inout [String],
         selectedTiles: inout [String],
-        latestCaption: inout CaptionLine?
+        latestCaption: inout CaptionLine?,
+        localMuted: inout Bool?
     ) {
         guard depth < 20 else { return }
 
@@ -387,6 +431,16 @@ enum ZoomActiveSpeakerReader {
                     roster.append(name)
                     if isSelected(element) {
                         selectedTiles.append(name)
+                    }
+                    // Detect the local participant's mute state from the tile
+                    // description: "Name, Computer audio muted/unmuted, Video on/off".
+                    if localMuted == nil, isLocalParticipant(name) {
+                        let lower = desc.lowercased()
+                        if lower.contains("computer audio muted") {
+                            localMuted = true
+                        } else if lower.contains("computer audio unmuted") {
+                            localMuted = false
+                        }
                     }
                 }
                 if let name = parseZoomTileDescription(desc) {
@@ -420,7 +474,7 @@ enum ZoomActiveSpeakerReader {
             walk(
                 child, depth: depth + 1, roster: &roster, activeTiles: &activeTiles,
                 activeLabels: &activeLabels, selectedTiles: &selectedTiles,
-                latestCaption: &latestCaption)
+                latestCaption: &latestCaption, localMuted: &localMuted)
         }
     }
 
@@ -579,5 +633,16 @@ enum ZoomActiveSpeakerReader {
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
               let list = value as? [AXUIElement] else { return [] }
         return list
+    }
+
+    /// The focused window — accessible even when on an inactive Space, unlike
+    /// `kAXWindowsAttribute` which returns an empty list for windows on other
+    /// Spaces. The focused window's full AX subtree (participant tiles, etc.)
+    /// remains available regardless of which Space it's on.
+    private static func focusedWindow(_ app: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value)
+        guard err == .success, let value else { return nil }
+        return value as! AXUIElement
     }
 }

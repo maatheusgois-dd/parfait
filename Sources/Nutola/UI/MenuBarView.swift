@@ -17,11 +17,19 @@ struct MenuBarView: View {
             } else if let detected = app.detectedAppName {
                 detectionBanner(detected)
             } else {
+                let resumable = app.resumableMeeting
                 Button {
                     dismissMenu()
-                    Task { await app.startRecording() }
+                    Task {
+                        if resumable != nil {
+                            await app.resumeOrphanIfAny()
+                        } else {
+                            await app.startRecording()
+                        }
+                    }
                 } label: {
-                    Label("Start recording", systemImage: "record.circle")
+                    Label(resumable != nil ? "Resume recording" : "Start recording",
+                          systemImage: resumable != nil ? "play.circle" : "record.circle")
                         .font(.nutola(14, .semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)

@@ -32,11 +32,19 @@ final class MicRecorder: @unchecked Sendable {
     }
 
     static var permissionGranted: Bool {
-        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        // AVAudioApplication is the correct TCC API for AVAudioEngine mic
+        // access on macOS 14+. AVCaptureDevice.authorizationStatus(for: .audio)
+        // can diverge (returns .denied when AVAudioApplication is .granted),
+        // especially with ad-hoc signed apps whose CDHash changes per rebuild.
+        AVAudioApplication.shared.recordPermission == .granted
     }
 
     static func requestPermission() async -> Bool {
-        await AVCaptureDevice.requestAccess(for: .audio)
+        await withCheckedContinuation { continuation in
+            AVAudioApplication.requestRecordPermission { granted in
+                continuation.resume(returning: granted)
+            }
+        }
     }
 
     /// True when the default input routes over Bluetooth (AirPods, etc.). Zoom often
@@ -235,6 +243,12 @@ final class MicRecorder: @unchecked Sendable {
     private var file: AVAudioFile?
     private var converter: AVAudioConverter?
     private var configObserver: (any NSObjectProtocol)?
+    /// Core Audio property listener for default input device changes (e.g. AirPods
+    /// connecting mid-recording). AVAudioEngine's own .configurationChange notification
+    /// only fires when the engine's input node format changes, not when the system's
+    /// default input device changes underneath — so without this listener, the mic
+    /// engine goes permanently silent when the default input device switches.
+    private var inputDeviceListener: AudioObjectPropertyListenerBlock?
     private static let barCount = 12
     private var smoothedLevels = [Float](repeating: 0, count: barCount)
     /// When we temporarily switch HAL default input for a built-in fallback.
@@ -299,24 +313,64 @@ final class MicRecorder: @unchecked Sendable {
             ],
             commonFormat: .pcmFormatFloat32,
             interleaved: false)
-
-        self.engine = engine
         self.file = file
-        activeInputDeviceName = inputName
-
+        self.engine = engine
         do {
-            try installTapLocked(on: engine)
-            configObserver = NotificationCenter.default.addObserver(
-                forName: .AVAudioEngineConfigurationChange,
-                object: engine,
-                queue: nil
-            ) { [weak self] _ in
-                self?.restartQueue.async { self?.restartAfterConfigurationChange() }
+        try installTapLocked(on: engine)
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { [weak self] _ in
+            self?.restartQueue.async { self?.restartAfterConfigurationChange() }
+        }
+        // Also listen for default input device changes at the Core Audio level.
+        // AVAudioEngine's .configurationChange doesn't fire when the system's default
+        // input device changes (e.g. AirPods connecting), leaving the engine silently
+        // running on a now-dead device with no buffers. This listener catches that.
+        var inputAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let inputListener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            NutolaConsoleLog.recording("mic default input device changed — restarting")
+            self?.restartQueue.async { self?.restartAfterConfigurationChange() }
+        }
+        AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &inputAddr, restartQueue, inputListener)
+        inputDeviceListener = inputListener
+        engine.prepare()
+        try engine.start()
+        NutolaConsoleLog.recording(
+            "mic engine started device=[\(inputName)] fileRate=\(file.processingFormat.sampleRate)")
+        // TCC silent-block detector + auto-restart: if no buffers arrive within
+        // 5s, the mic permission was silently denied by TCC when the engine
+        // started (common with ad-hoc signed apps after a rebuild, or when the
+        // TCC prompt appears after the engine already started). Restarting the
+        // engine re-acquires the audio input now that TCC has fully granted
+        // access at the kernel level.
+        restartQueue.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let received = self.captureStats.receivedAnyBuffer
+            self.lock.unlock()
+            if !received {
+                NutolaConsoleLog.recording(
+                    "mic no buffers after 5s — restarting engine (TCC grant may have arrived late)")
+                self.restartAfterConfigurationChange()
+                // Check again after restart — if still no buffers, warn.
+                self.restartQueue.asyncAfter(deadline: .now() + 5) { [weak self] in
+                    guard let self else { return }
+                    self.lock.lock()
+                    let stillEmpty = !self.captureStats.receivedAnyBuffer
+                    self.lock.unlock()
+                    if stillEmpty {
+                        NutolaConsoleLog.recording(
+                            "mic WARNING — still no buffers after restart. TCC may be blocking mic access. Try: System Settings → Privacy & Security → Microphone → toggle Nutola OFF then ON")
+                    }
+                }
             }
-            engine.prepare()
-            try engine.start()
-            NutolaConsoleLog.recording(
-                "mic engine started device=[\(inputName)] fileRate=\(file.processingFormat.sampleRate)")
+        }
         } catch {
             let ns = error as NSError
             NutolaConsoleLog.recording(
@@ -371,7 +425,7 @@ final class MicRecorder: @unchecked Sendable {
         // installTap throws an ObjC NSException (not a Swift Error) when the format
         // doesn't match the live route — e.g. Bluetooth headphones connecting
         // mid-recording flips the hardware format. Swift can't catch NSException,
-        // so an unwrapped throw becomes SIGABRT and kills the app. Run it inside an
+        // so an unwrapped throw becomes SIGABRT and kills the process. Run it inside an
         // ObjC @try/@catch and surface it as a Swift error instead.
         let exception = NutolaTryBlock {
             input.installTap(onBus: 0, bufferSize: 1024, format: format, block: tapBlock)
@@ -401,6 +455,15 @@ final class MicRecorder: @unchecked Sendable {
         if let configObserver {
             NotificationCenter.default.removeObserver(configObserver)
             self.configObserver = nil
+        }
+        if let inputDeviceListener {
+            var addr = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDefaultInputDevice,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain)
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject), &addr, restartQueue, inputDeviceListener)
+            self.inputDeviceListener = nil
         }
         if let engine {
             engine.inputNode.removeTap(onBus: 0)

@@ -215,6 +215,7 @@ private struct GeneralSettings: View {
             accessibilityTrusted = AccessibilityPermission.isTrusted
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            micStatus = MicRecorder.permissionGranted
             systemAudioStatus = SystemAudioPermission.status()
             accessibilityTrusted = AccessibilityPermission.isTrusted
         }
@@ -417,7 +418,7 @@ private struct CalendarSettings: View {
     private func grantAccess() async {
         calendarStatus = await CalendarAuthorization.requestAccess()
         reloadCalendars()
-        await app.calendar.refreshAgenda()
+        await app.calendar.resetEventStoreAfterGrant()
     }
 
     private func resetCalendars() {

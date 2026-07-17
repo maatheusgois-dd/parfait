@@ -42,6 +42,13 @@ func axAllWindows(_ app: AXUIElement) -> [AXUIElement] {
     return list
 }
 
+func axFocusedWindow(_ app: AXUIElement) -> AXUIElement? {
+    var value: CFTypeRef?
+    let err = AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value)
+    guard err == .success, let value else { return nil }
+    return value as! AXUIElement
+}
+
 func axIsSelected(_ e: AXUIElement) -> Bool {
     var value: CFTypeRef?
     guard AXUIElementCopyAttributeValue(e, kAXSelectedAttribute as CFString, &value) == .success
@@ -258,11 +265,26 @@ func zoomScan() -> ScanResult {
         }
     }
 
-    let windows = axAllWindows(root)
-    if windows.isEmpty {
+    // Strategy: try multiple AX entry points to find participant tiles.
+    // 1. kAXWindowsAttribute — all windows (works when on the active Space).
+    // 2. kAXFocusedWindowAttribute — the focused window (works even when on
+    //    another Space — kAXWindowsAttribute returns 0 for inactive Spaces,
+    //    but the focused window is still accessible with its full subtree).
+    // 3. kAXChildrenAttribute on root — last resort (usually just the menu bar).
+    var scannedWindows = axAllWindows(root)
+    if scannedWindows.isEmpty {
+        // kAXWindowsAttribute is empty when the window is on another Space.
+        // Fall back to the focused window, which still has its full AX subtree
+        // even on inactive Spaces.
+        if let focused = axFocusedWindow(root) {
+            scannedWindows = [focused]
+        }
+    }
+    if scannedWindows.isEmpty {
+        // No windows at all — walk from root (menu bar only, but try anyway).
         walk(root, depth: 0)
     } else {
-        for window in windows {
+        for window in scannedWindows {
             walk(window, depth: 0)
         }
     }
@@ -328,12 +350,19 @@ func dumpAXTree() {
     }
 
     print("=== Zoom AX Tree Dump (pid=\(app.processIdentifier)) ===")
-    let windows = axAllWindows(root)
-    if windows.isEmpty {
+    var dumpWindows = axAllWindows(root)
+    if dumpWindows.isEmpty {
+        if let focused = axFocusedWindow(root) {
+            print("(kAXWindowsAttribute empty — using kAXFocusedWindowAttribute)")
+            dumpWindows = [focused]
+        }
+    }
+    if dumpWindows.isEmpty {
+        print("(no windows found — dumping root)")
         dump(root, depth: 0)
     } else {
-        print("(\(windows.count) windows found via kAXWindowsAttribute)")
-        for window in windows {
+        print("(\(dumpWindows.count) windows)")
+        for window in dumpWindows {
             dump(window, depth: 0)
             if count >= maxDump { break }
         }
@@ -467,6 +496,7 @@ let opts = parseArgs()
 if opts.watch {
     while true {
         runScan(opts: opts)
+        fflush(stdout)
         Thread.sleep(forTimeInterval: opts.interval)
     }
 } else {

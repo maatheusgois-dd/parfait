@@ -147,10 +147,13 @@ final class ZoomSpeakerTracker: PlatformSpeakerTracker, @unchecked Sendable {
             persist(force: false)
         }
 
-        // Persist the roster whenever it changes, OR on the first non-empty scan
-        // (the change-gating alone never fires for a stable participant list, so the
-        // batch pipeline would find no zoom_roster.json and lose all speaker names).
-        if scan.roster != lastRoster || (!scan.roster.isEmpty && !rosterPersisted) {
+        // Persist the roster whenever it changes, OR on the first non-empty scan.
+        // When the scan returns empty (Zoom window temporarily not in the AX tree,
+        // e.g. another app frontmost, window redrawing), keep the last known roster
+        // rather than blanking it — the participants haven't actually left.
+        if scan.roster.isEmpty {
+            // Keep lastRoster; don't overwrite with empty.
+        } else if scan.roster != lastRoster || !rosterPersisted {
             lastRoster = scan.roster
             archive.saveZoomRoster(scan.roster, for: meetingID)
             rosterPersisted = true

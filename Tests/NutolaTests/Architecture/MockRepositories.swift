@@ -96,6 +96,7 @@ struct MockSettingsRepository: SettingsRepository {
     var preferredAIProvider: AIProvider = .apple
     var preferClaudeSummaries = false
     var showLiveRecordingCard = true
+    var smartTemplatesEnabled = false
 }
 
 // MARK: - Processing

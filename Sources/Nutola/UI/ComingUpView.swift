@@ -86,22 +86,27 @@ struct ComingUpView: View {
                     .buttonStyle(.plain)
 
                     if showArchived {
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 2) {
                             ForEach(Array(archivedStore.archivedTitles).sorted(), id: \.self) { title in
                                 archivedRow(title: title, isSeries: true)
                             }
                             ForEach(archivedStore.archivedEvents) { evt in
                                 archivedRow(title: evt.title, isSeries: false, eventID: evt.id)
                             }
-                            Button(role: .destructive) {
+                            Divider()
+                                .padding(.top, 4)
+                            Button {
                                 archivedStore.clearAll()
                                 Task { await app.calendar.refreshAgenda() }
                             } label: {
-                                Label("Unarchive all", systemImage: "arrow.up.out.of.square")
-                                    .font(.nutola(11))
+                                HStack {
+                                    Image(systemName: "arrow.up.out.of.square")
+                                    Text("Unarchive all")
+                                }
+                                .font(.nutola(11))
                             }
                             .buttonStyle(.plain)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Theme.blueberry)
                             .padding(.top, 4)
                         }
                         .padding(.top, 4)

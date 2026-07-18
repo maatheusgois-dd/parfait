@@ -31,6 +31,7 @@ enum SettingsKey {
     static let developerMode = "developerMode"                 // show Debug settings tab
     static let crashDiagnostics = "crashDiagnostics"           // write a scrubbed diagnostic on crash (opt-in)
     static let recipes = "recipes"                     // saved Ask Claude prompt library (RecipeStore)
+    static let tokenUsageHistory = "token-usage-history"      // [DailyTokenUsage] JSON: last 14 days of AI token usage
     static let didSeedRecipes = "didSeedRecipes"           // one-shot flag: built-in suggestions seeded into RecipeStore
 }
 

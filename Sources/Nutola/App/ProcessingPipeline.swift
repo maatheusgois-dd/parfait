@@ -235,12 +235,18 @@ enum ProcessingPipeline {
                 onDelta: { onSummary(.streaming($0)) })
         }
 
+        // Track the summary text we persisted so the naming stage can reuse it
+        // instead of re-reading `archive.summary(for:)` from disk. Stays nil in
+        // the edit-guard-blocked and failure paths, where we still must read the
+        // (possibly user-edited) file to name the meeting accurately.
+        var savedSummary: String?
         switch finalOutcome {
         case .success(let summary, let provider):
             // Edit-guard: if the user edited the draft while we were transcribing,
             // keep their version rather than clobbering it with the improvement.
             if draft == nil || archive.summary(for: id) == draft?.text {
                 try? archive.saveSummary(summary, for: id)
+                savedSummary = summary
                 outcome.summaryProvider = provider
             }
         case .failure(let why):
@@ -251,7 +257,9 @@ enum ProcessingPipeline {
         // Name the meeting from whatever notes we ended up with — the improvement,
         // the draft it fell back to, or the user's own edit — so a draft-only or
         // improve-failed meeting still gets a title, not just the happy path.
-        let finalText = archive.summary(for: id)
+        // Reuse the just-saved summary when we have it; only re-read from disk
+        // when the edit-guard blocked the save (user edited) or the pass failed.
+        let finalText = savedSummary ?? archive.summary(for: id)
         if meeting.calendarEventTitle == nil, !finalText.isEmpty {
             onProgress("Naming the meeting…")
             outcome.generatedTitle = await generateTitle(

@@ -729,7 +729,12 @@ struct MeetingDetailView: View {
                 Link("Open published page", destination: url)
             }
             Divider()
-            Button("Export HTML…") { exportHTML() }
+            Menu("Export…") {
+                Button("HTML…") { exportHTML() }
+                Button("Markdown…") { exportMarkdown() }
+                Button("Subtitles (.srt)…") { exportSRT() }
+                Button("Subtitles (.vtt)…") { exportVTT() }
+            }
             FolderPickerMenu(
                 currentFolderID: meeting.folderID,
                 calendarTitle: meeting.calendarEventTitle ?? meeting.title,
@@ -814,7 +819,7 @@ struct MeetingDetailView: View {
 
     private func exportHTML() {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = meeting.title.replacingOccurrences(of: "/", with: "-") + ".html"
+        panel.nameFieldStringValue = safeFilename + ".html"
         panel.allowedContentTypes = [.html]
         guard panel.runModal() == .OK, let dest = panel.url else { return }
         let html = HTMLExporter.html(
@@ -822,5 +827,42 @@ struct MeetingDetailView: View {
             summaryMarkdown: app.store.summary(for: meeting.id),
             segments: app.store.transcript(for: meeting.id))
         try? html.data(using: .utf8)?.write(to: dest)
+    }
+
+    private func exportMarkdown() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = safeFilename + ".md"
+        panel.allowedContentTypes = [.plainText]
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        let md = TranscriptFormatter.markdown(
+            app.store.transcript(for: meeting.id),
+            speakers: meeting.speakers)
+        try? md.data(using: .utf8)?.write(to: dest)
+    }
+
+    private func exportSRT() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = safeFilename + ".srt"
+        panel.allowedContentTypes = [.plainText]
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        let srt = TranscriptFormatter.srt(
+            app.store.transcript(for: meeting.id),
+            speakers: meeting.speakers)
+        try? srt.data(using: .utf8)?.write(to: dest)
+    }
+
+    private func exportVTT() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = safeFilename + ".vtt"
+        panel.allowedContentTypes = [.plainText]
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        let vtt = TranscriptFormatter.vtt(
+            app.store.transcript(for: meeting.id),
+            speakers: meeting.speakers)
+        try? vtt.data(using: .utf8)?.write(to: dest)
+    }
+
+    private var safeFilename: String {
+        meeting.title.replacingOccurrences(of: "/", with: "-")
     }
 }

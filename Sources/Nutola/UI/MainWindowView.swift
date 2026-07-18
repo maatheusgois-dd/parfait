@@ -3,6 +3,7 @@ import SwiftUI
 enum SidebarItem: Hashable {
     case home
     case meetings
+    case insights
     case library
     case folder(UUID)
 }
@@ -56,6 +57,7 @@ struct MainWindowView: View {
         switch selection {
         case .home: "Coming up"
         case .meetings: "Meetings"
+        case .insights: "Insights"
         case .library: "Ask"
         case .folder(let id):
             app.folders.folder(id: id)?.name ?? "Folder"
@@ -77,11 +79,11 @@ struct MainWindowView: View {
             }
         }
     }
-
     private var navSection: some View {
         Section {
             sidebarRow(.home, label: "Coming up", icon: "calendar")
             sidebarRow(.meetings, label: "Meetings", icon: "list.bullet.rectangle")
+            sidebarRow(.insights, label: "Insights", icon: "chart.bar.xaxis")
             sidebarRow(.library, label: "Ask", icon: "bubble.left.and.text.bubble.right")
         }
     }
@@ -145,6 +147,8 @@ struct MainWindowView: View {
                     ComingUpView()
                 case .meetings:
                     MeetingsListView()
+                case .insights:
+                    MeetingInsightsView()
                 case .library:
                     LibraryLauncherView()
                 case .folder(let id):

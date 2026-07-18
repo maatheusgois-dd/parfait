@@ -108,6 +108,25 @@ struct ClaudeCLI {
         return fastProbe() != nil
     }
 
+    /// Shells out to `claude --version`. Call off the main thread; returns nil if
+    /// the CLI is missing or the version can't be parsed.
+    static func version() -> String? {
+        guard let cli = resolveBlocking() else { return nil }
+        let proc = Process()
+        proc.executableURL = cli
+        proc.arguments = ["--version"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        guard (try? proc.run()) != nil else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        let raw = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw?.isEmpty == false ? raw : nil
+    }
+
+
     /// Neutral cwd for every invocation: --resume session lookup is scoped to cwd, and an
     /// app-owned dir keeps stray project CLAUDE.md files out of the model context.
     static var workDir: URL {

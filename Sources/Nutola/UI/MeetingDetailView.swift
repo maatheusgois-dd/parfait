@@ -165,6 +165,16 @@ struct MeetingDetailView: View {
             if case .done = publishState {
                 GranolaChip(icon: "checkmark.circle.fill", text: "Shared", accent: Theme.mint(scheme))
             }
+            Button {
+                copyTranscript()
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.secondary(scheme))
+            }
+            .buttonStyle(.plain)
+            .help("Copy transcript")
+            .disabled(app.store.transcript(for: meeting.id).isEmpty)
             publishMenu
         }
         .padding(.horizontal, 20)
@@ -819,6 +829,14 @@ struct MeetingDetailView: View {
     private func copyNotes() {
         let text = app.store.summary(for: meeting.id)
         guard !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func copyTranscript() {
+        let segments = app.store.transcript(for: meeting.id)
+        guard !segments.isEmpty else { return }
+        let text = TranscriptFormatter.plainText(segments, speakers: meeting.speakers)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }

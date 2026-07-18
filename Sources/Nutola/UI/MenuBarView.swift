@@ -59,8 +59,11 @@ struct MenuBarView: View {
                         Spacer()
                         Button("Cancel") { showQuitConfirm = false }
                             .controlSize(.small)
+                            .buttonStyle(.bordered)
                         Button("Quit", role: .destructive) { NSApp.terminate(nil) }
                             .controlSize(.small)
+                            .buttonStyle(.borderedProminent)
+                            .tint(.red)
                     }
                 }
                 .padding(.top, 4)
@@ -83,9 +86,9 @@ struct MenuBarView: View {
                     .buttonStyle(.plain)
                     .help("Quit Nutola")
                 }
-            }
         }
-        .padding(14)
+        }
+        .padding(EdgeInsets(top: 14, leading: 14, bottom: 18, trailing: 14))
         .frame(width: 320)
         .background(MenuBarExtraWindowHook())
         .task {

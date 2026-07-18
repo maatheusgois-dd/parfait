@@ -17,12 +17,21 @@ struct MeetingDetailView: View {
     @State private var sideNotes = ""
     @State private var showSideNotes = false
     @State private var sideNotesSaveTask: Task<Void, Never>?
+    @State private var decisionsExpanded = true
+    @State private var showShareNotes = false
+    @State private var shareNotesState: ShareNotesState = .idle
     @AppStorage(SettingsKey.sideNotesPanelWidth) private var sideNotesWidth = 280.0
 
     var backTitle: String?
     var onBack: (() -> Void)?
 
     enum PublishState: Equatable {
+        case idle, working
+        case done(URL)
+        case failed(String)
+    }
+
+    enum ShareNotesState: Equatable {
         case idle, working
         case done(URL)
         case failed(String)
@@ -112,6 +121,9 @@ struct MeetingDetailView: View {
         } message: {
             Text("This permanently removes the audio, transcript, and notes from your Mac.")
         }
+        .sheet(isPresented: $showShareNotes) {
+            shareNotesSheet
+        }
     }
 
     private var isRecordingThisMeeting: Bool {
@@ -195,8 +207,8 @@ struct MeetingDetailView: View {
             ScrollView {
                 VStack(spacing: 20) {
                     documentHeader
-                    noticeBanner
                     notesSection
+                    decisionsSection
                     transcriptSection
                 }
                 .contentColumn()
@@ -273,6 +285,20 @@ struct MeetingDetailView: View {
                 .popover(isPresented: $showAttendees, arrowEdge: .top) {
                     attendeesPopover
                 }
+            }
+            if let type = detectedMeetingType {
+                GranolaChip(
+                    icon: type.symbolName,
+                    text: type.displayName,
+                    accent: Theme.blueberry(scheme))
+                    .help("Auto-detected meeting type. Template: \(MeetingTemplateResolver.templateName(for: type)).")
+            }
+            if let costChip = meetingCostChip {
+                GranolaChip(
+                    icon: nil,
+                    text: "💰 \(costChip.formattedCost)",
+                    accent: Theme.honey(scheme))
+                .help("Estimated cost: \(costChip.attendeeCount) people × \(costChip.durationMinutes) min × \(MeetingCost.format(AppSettings.hourlyRatePerPerson))/hr")
             }
             folderChipContent
             if let provider = meeting.summaryProvider {
@@ -377,6 +403,66 @@ struct MeetingDetailView: View {
             maxWidth: .infinity,
             maxHeight: shouldCenterEmptyNotes ? .infinity : nil,
             alignment: shouldCenterEmptyNotes ? .center : .leading)
+    }
+
+    // MARK: - Decisions
+
+    /// Explicit decisions extracted from the transcript. Only rendered when the
+    /// meeting is not being recorded live (decisions surface once a transcript is
+    /// finalized) and at least one decision was found.
+    @ViewBuilder
+    private var decisionsSection: some View {
+        if !decisions.isEmpty, !isRecordingThisMeeting {
+            DisclosureGroup(isExpanded: $decisionsExpanded) {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(decisions) { decision in
+                        decisionCard(decision)
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.mint(scheme))
+                    Text("Decisions")
+                        .font(.nutola(12, .semibold))
+                        .foregroundStyle(Theme.secondary(scheme))
+                    Text("\(decisions.count)")
+                        .font(.nutola(11, .semibold))
+                        .foregroundStyle(Theme.tertiary(scheme))
+                }
+            }
+        }
+    }
+
+    private var decisions: [Decision] {
+        DecisionExtractor.extract(
+            from: app.store.transcript(for: meeting.id),
+            speakers: meeting.speakers)
+    }
+
+    private func decisionCard(_ decision: Decision) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(decision.speakerName)
+                    .font(.nutola(11, .semibold))
+                    .foregroundStyle(Theme.secondary(scheme))
+                Spacer(minLength: 0)
+                Text(MeetingArchive.timestamp(decision.timestamp))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(Theme.tertiary(scheme))
+            }
+            Text(decision.quote)
+                .font(.nutola(13))
+                .foregroundStyle(Theme.heading(scheme))
+                .textSelection(.enabled)
+                .lineSpacing(3)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(decision.speakerName) at \(MeetingArchive.timestamp(decision.timestamp)): \(decision.quote)")
     }
 
     // MARK: - Transcript
@@ -614,6 +700,29 @@ struct MeetingDetailView: View {
     private var attendeeChipLabel: String {
         meeting.attendees.count == 1 ? "1 person" : "\(meeting.attendees.count) people"
     }
+    /// Meeting-type badge for the header. Resolves the type from the calendar
+    /// title + attendees (the transcript isn't available at header time) and
+    /// returns it only when smart templates are on and the type is specific
+    /// enough to be worth showing — `.generic` is suppressed so ordinary
+    /// meetings don't get a noisy "General" chip.
+    private var detectedMeetingType: MeetingType? {
+        guard AppSettings.smartTemplatesEnabled else { return nil }
+        let type = MeetingTemplateResolver.resolve(for: meeting)
+        return type == .generic ? nil : type
+    }
+    /// Estimated-meeting-cost badge for the header. Non-nil only when the user
+    /// has the cost feature on AND the meeting has both attendees and a recorded
+    /// duration — otherwise the badge is suppressed (no attendees ⇒ no cost basis,
+    /// zero duration ⇒ a $0 chip that just adds noise).
+    private var meetingCostChip: MeetingCost? {
+        guard AppSettings.showMeetingCost,
+              !meeting.attendees.isEmpty,
+              meeting.duration > 0 else { return nil }
+        return MeetingCostCalculator.estimate(
+            attendees: meeting.attendees,
+            duration: meeting.duration,
+            hourlyRatePerPerson: AppSettings.hourlyRatePerPerson)
+    }
 
     /// Empty-state block already shows the notice and primary action — skip the banner.
     private var emptyNotesHandlesNotice: Bool {
@@ -791,6 +900,8 @@ struct MeetingDetailView: View {
                 Divider()
                 Button("CSV (all meetings)…") { exportCSVAll() }
                     .disabled(app.store.meetings.isEmpty)
+                Divider()
+                Button("Share Notes…") { showShareNotes = true }
             }
             FolderPickerMenu(
                 currentFolderID: meeting.folderID,
@@ -862,6 +973,136 @@ struct MeetingDetailView: View {
                 NSPasteboard.general.setString(rendered.absoluteString, forType: .string)
             } catch {
                 publishState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    // MARK: - Share Notes
+
+    /// Sheet with three ways to share the read-only notes page: copy the HTML
+    /// to the pasteboard, save it to disk via NSSavePanel, or publish a secret
+    /// gist and reveal the rendered notes.nutola.to URL.
+    private var shareNotesSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Share Notes")
+                .font(.nutola(15, .semibold))
+                .foregroundStyle(Theme.heading(scheme))
+            Text("A read-only page with the summary, action items, and transcript.")
+                .font(.nutola(12))
+                .foregroundStyle(Theme.secondary(scheme))
+
+            HStack(spacing: 10) {
+                Button {
+                    copyShareNotesHTML()
+                } label: {
+                    Label("Copy HTML", systemImage: "doc.on.doc")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    saveShareNotesHTML()
+                } label: {
+                    Label("Save HTML", systemImage: "square.and.arrow.down")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                if GitHubGist.isAvailable {
+                    Button {
+                        publishShareNotes()
+                    } label: {
+                        if shareNotesState == .working {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label("Publish to Gist", systemImage: "safari")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(actionColor)
+                    .disabled(shareNotesState == .working)
+                } else {
+                    Button("Publish to Gist (needs gh)") {}
+                        .disabled(true)
+                }
+            }
+
+            switch shareNotesState {
+            case .idle:
+                EmptyView()
+            case .working:
+                Text("Publishing…")
+                    .font(.nutola(11))
+                    .foregroundStyle(Theme.secondary(scheme))
+            case .done(let url):
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Published. The link is on your clipboard.")
+                        .font(.nutola(11))
+                        .foregroundStyle(Theme.mint(scheme))
+                    Link(url.absoluteString, destination: url)
+                        .font(.nutola(11))
+                }
+            case .failed(let message):
+                Text(message)
+                    .font(.nutola(11))
+                    .foregroundStyle(.red)
+            }
+
+            Spacer()
+            HStack {
+                Spacer()
+                Button("Done") { showShareNotes = false }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(20)
+        .frame(width: 420, height: 280)
+        .onDisappear { shareNotesState = .idle }
+    }
+
+    private func sharedNotesInputs() -> (Meeting, String, [TranscriptTurn], [ActionItem]) {
+        let m = meeting
+        let summary = app.store.summary(for: m.id)
+        let turns = TranscriptTurnBuilder.turns(from: app.store.transcript(for: m.id))
+        let items = ActionItemParser.parse(summary)
+        return (m, summary, turns, items)
+    }
+
+    private func copyShareNotesHTML() {
+        let (m, summary, turns, items) = sharedNotesInputs()
+        let html = SharedNotesExporter.exportHTML(
+            meeting: m, summary: summary, transcript: turns, actionItems: items)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(html, forType: .string)
+    }
+
+    private func saveShareNotesHTML() {
+        let (m, summary, turns, items) = sharedNotesInputs()
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = safeFilename + ".html"
+        panel.allowedContentTypes = [.html]
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        let html = SharedNotesExporter.exportHTML(
+            meeting: m, summary: summary, transcript: turns, actionItems: items)
+        try? html.data(using: .utf8)?.write(to: dest)
+    }
+
+    private func publishShareNotes() {
+        shareNotesState = .working
+        let (m, summary, turns, items) = sharedNotesInputs()
+        Task {
+            do {
+                let url = try await SharedNotesExporter.publishToGist(
+                    meeting: m, summary: summary, transcript: turns, actionItems: items)
+                if var fresh = app.store.meeting(id: m.id) {
+                    fresh.publishedURL = url.absoluteString
+                    app.store.upsert(fresh)
+                }
+                shareNotesState = .done(url)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(url.absoluteString, forType: .string)
+            } catch {
+                shareNotesState = .failed(error.localizedDescription)
             }
         }
     }

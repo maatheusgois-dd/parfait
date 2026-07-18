@@ -15,12 +15,21 @@ struct TranscriptReaderView: View {
     @State private var newName = ""
     @State private var searchText = ""
     @State private var searchMatchCount = 0
+    /// Pin state lives in a shared store; each turn card observes it via
+    /// `PinToggleButton` so toggles re-render without a manual version bump.
+    private var pins: PinnedSegmentsStore { .shared }
+
     private var turns: [TranscriptTurn] {
         TranscriptTurnBuilder.turns(from: segments)
     }
 
     private var filteredTurns: [TranscriptTurn] {
         TranscriptTurnBuilder.filter(turns: turns, by: searchText)
+    }
+
+    /// Per-speaker talk-time breakdown for the Transcript tab header chip.
+    private var talkTimeStats: [SpeakerStats] {
+        TalkTimeStats.compute(segments: segments, speakers: meeting.speakers)
     }
 
     var body: some View {
@@ -62,6 +71,7 @@ struct TranscriptReaderView: View {
                 Text(statsLabel)
                     .font(.nutola(11))
                     .foregroundStyle(Theme.tertiary(scheme))
+                TalkTimeStatsBar(stats: talkTimeStats)
             }
             Spacer()
             if draft != nil {
@@ -148,6 +158,9 @@ struct TranscriptReaderView: View {
                             renaming = meeting.speakers.first { $0.id == turn.speakerID }
                                 ?? Speaker(id: turn.speakerID, name: name(for: turn.speakerID))
                         })
+                        .overlay(alignment: .topTrailing) {
+                            pinButton(for: turn)
+                        }
                 }
             }
             .frame(maxWidth: 660, alignment: .leading)
@@ -172,6 +185,19 @@ struct TranscriptReaderView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
         .background(.thinMaterial)
+    }
+
+    /// Bookmark toggle pinned to each turn card's top-trailing corner.
+    /// A dedicated `@ObservedObject` view so it re-renders the instant the
+    /// shared store publishes a change — no manual version counter needed.
+    private func pinButton(for turn: TranscriptTurn) -> some View {
+        PinToggleButton(
+            store: pins,
+            meetingID: meeting.id,
+            turn: turn,
+            speakerName: name(for: turn.speakerID),
+            actionColor: actionColor,
+            tertiaryColor: Theme.tertiary(scheme))
     }
 
     private func name(for speakerID: String) -> String {
@@ -227,5 +253,36 @@ struct TranscriptReaderView: View {
             app.store.upsert(fresh)
         }
         draft = nil
+    }
+}
+
+
+/// The bookmark toggle on each transcript turn card.
+///
+/// Observes the shared `PinnedSegmentsStore` directly so the icon flips the
+/// moment a pin is added or removed — no parent-view rebuild required. Kept
+/// as a tiny leaf view so the rest of `TranscriptReaderView` doesn't have to
+/// observe the store (which would re-render every turn on every toggle).
+private struct PinToggleButton: View {
+    @ObservedObject var store: PinnedSegmentsStore
+    let meetingID: UUID
+    let turn: TranscriptTurn
+    let speakerName: String
+    let actionColor: Color
+    let tertiaryColor: Color
+
+    var body: some View {
+        let pinned = store.isPinned(meetingID: meetingID, turnID: turn.id)
+        Button {
+            store.toggle(
+                meetingID: meetingID, turn: turn, speakerName: speakerName)
+        } label: {
+            Image(systemName: pinned ? "bookmark.fill" : "bookmark")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(pinned ? actionColor : tertiaryColor)
+        }
+        .buttonStyle(.plain)
+        .help(pinned ? "Unpin this turn" : "Pin this turn")
+        .accessibilityLabel(pinned ? "Unpin turn" : "Pin turn")
     }
 }

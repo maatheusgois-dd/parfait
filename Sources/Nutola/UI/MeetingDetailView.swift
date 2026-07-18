@@ -734,6 +734,9 @@ struct MeetingDetailView: View {
                 Button("Markdown…") { exportMarkdown() }
                 Button("Subtitles (.srt)…") { exportSRT() }
                 Button("Subtitles (.vtt)…") { exportVTT() }
+                Divider()
+                Button("CSV (all meetings)…") { exportCSVAll() }
+                    .disabled(app.store.meetings.isEmpty)
             }
             FolderPickerMenu(
                 currentFolderID: meeting.folderID,
@@ -815,6 +818,15 @@ struct MeetingDetailView: View {
         } catch {
             publishState = .failed(error.localizedDescription)
         }
+    }
+
+    private func exportCSVAll() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "Nutola meetings.csv"
+        panel.allowedContentTypes = [.plainText]
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        let csv = CSVExporter.export(meetings: app.store.meetings)
+        try? csv.data(using: .utf8)?.write(to: dest)
     }
 
     private func exportHTML() {

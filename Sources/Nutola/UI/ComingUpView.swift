@@ -6,7 +6,7 @@ struct ComingUpView: View {
     @Environment(\.openSettings) private var openSettings
 
     @State private var agendaOffsetDays = 0
-
+    @StateObject private var archivedStore = ArchivedEventStore()
     private var timelineDays: [CalendarAgendaDay] {
         app.calendar.timelineDays(offsetDays: agendaOffsetDays)
     }
@@ -231,6 +231,51 @@ struct ComingUpView: View {
             if highlighted {
                 RoundedRectangle(cornerRadius: 10)
                     .fill(Theme.card(scheme).opacity(scheme == .dark ? 0.85 : 0.65))
+            }
+        }
+        .contextMenu {
+            Button {
+                archivedStore.archiveTitle(event.title)
+                Task { await app.calendar.refreshAgenda() }
+            } label: {
+                Label("Archive series (hide all \"\(event.title)\")", systemImage: "archivebox.fill")
+            }
+            Button {
+                archivedStore.archiveEvent(id: event.id)
+                Task { await app.calendar.refreshAgenda() }
+            } label: {
+                Label("Archive this event only", systemImage: "archivebox")
+            }
+            Divider()
+            if !archivedStore.archivedTitles.isEmpty || !archivedStore.archivedEventIDs.isEmpty {
+                Menu("Archived events") {
+                    ForEach(Array(archivedStore.archivedTitles).sorted(), id: \.self) { title in
+                        Button {
+                            archivedStore.unarchiveTitle(title)
+                            Task { await app.calendar.refreshAgenda() }
+                        } label: {
+                            Label("Unarchive \(title)", systemImage: "arrow.up.out.of.square")
+                        }
+                    }
+                    if !archivedStore.archivedTitles.isEmpty && !archivedStore.archivedEventIDs.isEmpty {
+                        Divider()
+                    }
+                    ForEach(Array(archivedStore.archivedEventIDs).sorted(), id: \.self) { id in
+                        Button {
+                            archivedStore.unarchiveEvent(id: id)
+                            Task { await app.calendar.refreshAgenda() }
+                        } label: {
+                            Label("Unarchive event", systemImage: "arrow.up.out.of.square")
+                        }
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        archivedStore.clearAll()
+                        Task { await app.calendar.refreshAgenda() }
+                    } label: {
+                        Label("Clear all archived", systemImage: "trash")
+                    }
+                }
             }
         }
     }

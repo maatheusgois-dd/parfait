@@ -33,6 +33,8 @@ enum SettingsKey {
     static let recipes = "recipes"                     // saved Ask Claude prompt library (RecipeStore)
     static let tokenUsageHistory = "token-usage-history"      // [DailyTokenUsage] JSON: last 14 days of AI token usage
     static let didSeedRecipes = "didSeedRecipes"           // one-shot flag: built-in suggestions seeded into RecipeStore
+    static let archivedEventTitles = "archivedEventTitles"   // calendar events hidden by title (series)
+    static let archivedEventIDs = "archivedEventIDs"         // individual calendar events hidden by ID
 }
 
 enum AppearanceMode: String, CaseIterable, Identifiable, Hashable {

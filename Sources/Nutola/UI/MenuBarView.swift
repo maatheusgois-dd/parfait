@@ -16,6 +16,7 @@ struct MenuBarView: View {
     @State private var showQuitConfirm = false
     @State private var gearHovering = false
     @State private var powerHovering = false
+    @StateObject private var archivedStore = ArchivedEventStore()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -196,6 +197,20 @@ struct MenuBarView: View {
             }
             .buttonStyle(.plain)
             .disabled(app.isRecording || event.isPast())
+            .contextMenu {
+                Button {
+                    archivedStore.archiveTitle(event.title)
+                    Task { await app.calendar.refreshAgenda() }
+                } label: {
+                    Label("Archive series", systemImage: "archivebox.fill")
+                }
+                Button {
+                    archivedStore.archiveEvent(id: event.id)
+                    Task { await app.calendar.refreshAgenda() }
+                } label: {
+                    Label("Archive this event", systemImage: "archivebox")
+                }
+            }
 
             if showJoin, let url = event.conferenceURL {
                 ConferenceJoinButton(label: event.joinLabel, url: url)

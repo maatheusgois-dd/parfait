@@ -218,4 +218,88 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(archive.search("zebra").isEmpty)
         XCTAssertTrue(archive.search("   ").isEmpty)
     }
+
+    // MARK: - Error paths (#76, #78)
+
+    func testSaveSummaryThrowsWhenFolderDeleted() throws {
+        // A late pipeline write to a meeting the user deleted mid-run must
+        // surface the failure (the folder is gone) instead of silently recreating it.
+        let m = makeMeeting()
+        try archive.save(m)
+        try archive.saveSummary("first", for: m.id)
+        try archive.delete(id: m.id)
+        XCTAssertThrowsError(try archive.saveSummary("second", for: m.id))
+        XCTAssertEqual(archive.summary(for: m.id), "")
+    }
+
+    func testDeleteWhenFolderMissing() throws {
+        // delete(id:) must not throw when the meeting folder was already removed
+        // (e.g. user trashed it from Finder). Removing twice should be idempotent.
+        let m = makeMeeting()
+        try archive.save(m)
+        try archive.delete(id: m.id)
+        XCTAssertNil(archive.meeting(id: m.id))
+        // Second delete — folder is already gone.
+        XCTAssertNoThrow(try archive.delete(id: m.id))
+    }
+
+    // MARK: - Unicode / emoji round-trip (#77)
+
+    func testSummaryRoundTripUnicode() throws {
+        let m = makeMeeting()
+        try archive.save(m)
+        // Emoji + combining marks + non-BMP (U+1F600) + CJK + RTL Hebrew.
+        let unicode = "## 🎉 Q4 review — café naïve — שָׁלוֹם — 日本語"
+        try archive.saveSummary(unicode, for: m.id)
+        XCTAssertEqual(archive.summary(for: m.id), unicode)
+    }
+
+    // MARK: - Sorting (#79)
+
+    func testAllMeetingsSortedDescending() throws {
+        // allMeetings() returns newest createdAt first (descending).
+        var oldest = makeMeeting()
+        oldest.createdAt = Date(timeIntervalSince1970: 1_000)
+        try archive.save(oldest)
+        var middle = makeMeeting()
+        middle.createdAt = Date(timeIntervalSince1970: 2_000)
+        try archive.save(middle)
+        var newest = makeMeeting()
+        newest.createdAt = Date(timeIntervalSince1970: 3_000)
+        try archive.save(newest)
+        let all = archive.allMeetings()
+        XCTAssertEqual(all.count, 3)
+        XCTAssertEqual(all.map(\.id), [newest.id, middle.id, oldest.id])
+    }
+
+    // MARK: - Search edge cases (#80)
+
+    func testSearchWithEmptyQuery() {
+        // An empty query has no words to match — returns no hits rather than
+        // matching every meeting.
+        let m = makeMeeting(title: "Standup")
+        try? archive.save(m)
+        XCTAssertTrue(archive.search("").isEmpty)
+    }
+
+    func testSearchWithWhitespaceQuery() {
+        // Whitespace-only collapses to no words, same as empty.
+        let m = makeMeeting(title: "Standup")
+        try? archive.save(m)
+        XCTAssertTrue(archive.search("   \t  ").isEmpty)
+        XCTAssertTrue(archive.search("\n\n").isEmpty)
+    }
+
+    // MARK: - Zoom roster (#90)
+
+    func testZoomRosterRoundTrip() throws {
+        let m = makeMeeting()
+        try archive.save(m)
+        let roster = ["Alice Rivera", "Bob Chen", "桂 太郎"]
+        archive.saveZoomRoster(roster, for: m.id)
+        XCTAssertEqual(archive.zoomRoster(for: m.id), roster)
+        // Empty roster round-trips too (writes an empty array, not a deletion).
+        archive.saveZoomRoster([], for: m.id)
+        XCTAssertEqual(archive.zoomRoster(for: m.id), [])
+    }
 }

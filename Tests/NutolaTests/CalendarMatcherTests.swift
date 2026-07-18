@@ -317,4 +317,29 @@ final class CalendarMatcherTests: XCTestCase {
         AppSettings.resetCalendarSelection()
         XCTAssertTrue(AppSettings.disabledCalendarIDs.isEmpty)
     }
+
+    // MARK: - #81: denied / disabled access returns empty events
+
+    @MainActor
+    func testDeniedReturnsEmptyEvents() async {
+        // When calendar access is unavailable — denied by the user, or the
+        // calendar feature toggled off in Settings — `refreshAgenda` must
+        // return an empty agenda rather than querying EventKit. We exercise
+        // the deterministic "feature disabled" branch (same `guard … else`
+        // early-out as a denied TCC state) so the test is hermetic.
+        let store = CalendarStore()
+        let key = SettingsKey.useCalendar
+        let prior = UserDefaults.standard.object(forKey: key) as? Bool
+        UserDefaults.standard.set(false, forKey: key)
+        defer {
+            if let prior {
+                UserDefaults.standard.set(prior, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+        await store.refreshAgenda(now: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertTrue(store.agenda.isEmpty, "Disabled calendar must produce an empty agenda")
+        XCTAssertNil(store.nextUpcomingEvent)
+    }
 }

@@ -41,6 +41,10 @@ enum CalendarAgendaBuilder {
                 guard !AppSettings.showEventsWithoutParticipants else { return true }
                 return !event.attendees.isEmpty || event.conferenceURL != nil
             }
+            .filter { event in
+                // Hide archived events (by title series or individual event ID)
+                !ArchivedEventStore().isArchived(title: event.title, eventID: event.id)
+            }
             .sorted { $0.start < $1.start }
 
         var grouped: [String: [CalendarEventSummary]] = [:]

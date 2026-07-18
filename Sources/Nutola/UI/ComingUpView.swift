@@ -6,7 +6,7 @@ struct ComingUpView: View {
     @Environment(\.openSettings) private var openSettings
 
     @State private var agendaOffsetDays = 0
-
+    @StateObject private var archivedStore = ArchivedEventStore()
     private var timelineDays: [CalendarAgendaDay] {
         app.calendar.timelineDays(offsetDays: agendaOffsetDays)
     }
@@ -49,6 +49,112 @@ struct ComingUpView: View {
                 emptyCalendarCard(agendaOffsetDays == 0 ? "No upcoming events." : "No events in this range.")
             } else {
                 agendaCard
+            }
+            archivedSection
+        }
+    }
+
+    @State private var showArchived = false
+
+    private var archivedSection: some View {
+        Group {
+            if archivedStore.hasAny {
+                VStack(alignment: .leading, spacing: 0) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showArchived.toggle()
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: "archivebox.fill")
+                                .font(.nutola(13, .medium))
+                                .foregroundStyle(Theme.secondary(scheme))
+                            Text("Archived")
+                                .font(.nutola(13, .semibold))
+                                .foregroundStyle(Theme.secondary(scheme))
+                            Spacer()
+                            Text("\(archivedStore.archivedTitles.count + archivedStore.archivedEvents.count)")
+                                .font(.nutola(11))
+                                .foregroundStyle(Theme.tertiary(scheme))
+                            Image(systemName: showArchived ? "chevron.down" : "chevron.right")
+                                .font(.nutola(10))
+                                .foregroundStyle(Theme.tertiary(scheme))
+                        }
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    if showArchived {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(archivedStore.archivedTitles).sorted(), id: \.self) { title in
+                                archivedRow(title: title, isSeries: true)
+                            }
+                            ForEach(archivedStore.archivedEvents) { evt in
+                                archivedRow(title: evt.title, isSeries: false, eventID: evt.id)
+                            }
+                            Divider()
+                                .padding(.top, 4)
+                            Button {
+                                archivedStore.clearAll()
+                                Task { await app.calendar.refreshAgenda() }
+                            } label: {
+                                HStack {
+                                    Image(systemName: "arrow.up.out.of.square")
+                                    Text("Unarchive all")
+                                }
+                                .font(.nutola(11))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Theme.blueberry)
+                            .padding(.top, 4)
+                        }
+                        .padding(.top, 4)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+    }
+
+    private func archivedRow(title: String, isSeries: Bool, eventID: String? = nil) -> some View {
+        HStack {
+            Image(systemName: isSeries ? "archivebox.fill" : "archivebox")
+                .font(.nutola(11))
+                .foregroundStyle(Theme.tertiary(scheme))
+            Text(title)
+                .font(.nutola(12))
+                .foregroundStyle(Theme.secondary(scheme))
+                .lineLimit(1)
+            Spacer()
+            Button {
+                if isSeries {
+                    archivedStore.unarchiveTitle(title)
+                } else if let eventID {
+                    archivedStore.unarchiveEvent(id: eventID)
+                }
+                Task { await app.calendar.refreshAgenda() }
+            } label: {
+                Image(systemName: "arrow.up.out.of.square")
+                    .font(.nutola(11))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.blueberry)
+            .help("Unarchive")
+        }
+        .padding(.vertical, 2)
+        .contextMenu {
+            Button {
+                if isSeries {
+                    archivedStore.unarchiveTitle(title)
+                } else if let eventID {
+                    archivedStore.unarchiveEvent(id: eventID)
+                }
+                Task { await app.calendar.refreshAgenda() }
+            } label: {
+                Label("Unarchive", systemImage: "arrow.up.out.of.square")
             }
         }
     }
@@ -231,6 +337,51 @@ struct ComingUpView: View {
             if highlighted {
                 RoundedRectangle(cornerRadius: 10)
                     .fill(Theme.card(scheme).opacity(scheme == .dark ? 0.85 : 0.65))
+            }
+        }
+        .contextMenu {
+            Button {
+                archivedStore.archiveTitle(event.title)
+                Task { await app.calendar.refreshAgenda() }
+            } label: {
+                Label("Archive series (hide all \"\(event.title)\")", systemImage: "archivebox.fill")
+            }
+            Button {
+                archivedStore.archiveEvent(id: event.id, title: event.title)
+                Task { await app.calendar.refreshAgenda() }
+            } label: {
+                Label("Archive this event only", systemImage: "archivebox")
+            }
+            Divider()
+            if archivedStore.hasAny {
+                Menu("Archived events") {
+                    ForEach(Array(archivedStore.archivedTitles).sorted(), id: \.self) { title in
+                        Button {
+                            archivedStore.unarchiveTitle(title)
+                            Task { await app.calendar.refreshAgenda() }
+                        } label: {
+                            Label("Unarchive \(title)", systemImage: "arrow.up.out.of.square")
+                        }
+                    }
+                    if !archivedStore.archivedTitles.isEmpty && !archivedStore.archivedEvents.isEmpty {
+                        Divider()
+                    }
+                    ForEach(archivedStore.archivedEvents) { evt in
+                        Button {
+                            archivedStore.unarchiveEvent(id: evt.id)
+                            Task { await app.calendar.refreshAgenda() }
+                        } label: {
+                            Label("Unarchive \(evt.title)", systemImage: "arrow.up.out.of.square")
+                        }
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        archivedStore.clearAll()
+                        Task { await app.calendar.refreshAgenda() }
+                    } label: {
+                        Label("Clear all archived", systemImage: "trash")
+                    }
+                }
             }
         }
     }

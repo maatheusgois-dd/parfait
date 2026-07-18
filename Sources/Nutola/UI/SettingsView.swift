@@ -319,7 +319,7 @@ private struct CalendarSettings: View {
     @State private var calendarStatus = CalendarAuthorization.isAuthorized
     @State private var calendars: [CalendarSourceInfo] = []
     @State private var disabledIDs: Set<String> = AppSettings.disabledCalendarIDs
-
+    @StateObject private var archivedStore = ArchivedEventStore()
     var body: some View {
         Form {
             if !calendarStatus {
@@ -399,6 +399,57 @@ private struct CalendarSettings: View {
                     Text("Only events from enabled calendars appear in Coming up and when matching recordings.")
                         .font(.nutola(11))
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            if useCalendar {
+                Section("Archived events") {
+                    if !archivedStore.hasAny {
+                        Text("No archived events. Right-click an event in Coming up to hide it.")
+                            .font(.nutola(11))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(Array(archivedStore.archivedTitles).sorted(), id: \.self) { title in
+                            HStack {
+                                Label(title, systemImage: "archivebox.fill")
+                                    .font(.nutola(12))
+                                Spacer()
+                                Button {
+                                    archivedStore.unarchiveTitle(title)
+                                    Task { await app.calendar.refreshAgenda() }
+                                } label: {
+                                    Image(systemName: "arrow.up.out.of.square")
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(Theme.blueberry)
+                                .help("Unarchive series")
+                            }
+                        }
+                        ForEach(archivedStore.archivedEvents) { evt in
+                            HStack {
+                                Label(evt.title, systemImage: "archivebox")
+                                    .font(.nutola(12))
+                                Spacer()
+                                Button {
+                                    archivedStore.unarchiveEvent(id: evt.id)
+                                    Task { await app.calendar.refreshAgenda() }
+                                } label: {
+                                    Image(systemName: "arrow.up.out.of.square")
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(Theme.blueberry)
+                                .help("Unarchive event")
+                            }
+                        }
+                        Divider()
+                        Button(role: .destructive) {
+                            archivedStore.clearAll()
+                            Task { await app.calendar.refreshAgenda() }
+                        } label: {
+                            Label("Clear all archived", systemImage: "trash")
+                                .font(.nutola(11))
+                        }
+                    }
                 }
             }
         }

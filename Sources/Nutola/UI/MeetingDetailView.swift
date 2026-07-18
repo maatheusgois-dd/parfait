@@ -61,36 +61,31 @@ struct MeetingDetailView: View {
         }
         .background(Theme.surface(scheme))
         .safeAreaInset(edge: .bottom) {
-            if canContinueRecording {
+            if showProminentJoinButton, let join = joinConference {
                 VStack(spacing: 8) {
-                    HStack {
-                        Spacer()
-                        Button {
-                            Task { await app.continueRecording(meetingID: meeting.id) }
-                        } label: {
-                        Label("Resume recording", systemImage: "mic.fill")
-                            .font(.nutola(11, .semibold))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 5)
+                    if canContinueRecording {
+                        HStack {
+                            Spacer()
+                            Button {
+                                Task { await app.continueRecording(meetingID: meeting.id) }
+                            } label: {
+                                Label("Resume recording", systemImage: "mic.fill")
+                                    .font(.nutola(11, .semibold))
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 5)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Theme.mint(scheme))
+                            .clipShape(Capsule())
+                            Spacer()
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Theme.mint(scheme))
-                        .clipShape(Capsule())
-                        Spacer()
                     }
-                    if let join = joinConference, showProminentJoinButton {
-                        ConferenceJoinButton(label: join.label, url: join.url, prominent: true)
-                            .frame(maxWidth: 560)
-                    }
+                    ConferenceJoinButton(label: join.label, url: join.url, prominent: true)
+                        .frame(maxWidth: 560)
                 }
                 .frame(maxWidth: 560)
                 .padding(.horizontal, 24)
                 .padding(.bottom, 20)
-            } else if let join = joinConference, showProminentJoinButton {
-                ConferenceJoinButton(label: join.label, url: join.url, prominent: true)
-                    .frame(maxWidth: 560)
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 20)
             }
         }
         .task { await app.calendar.refreshAgenda() }

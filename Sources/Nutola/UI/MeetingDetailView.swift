@@ -187,6 +187,7 @@ struct MeetingDetailView: View {
                     documentHeader
                     noticeBanner
                     notesSection
+                    transcriptSection
                 }
                 .contentColumn()
                 .frame(minHeight: shouldCenterEmptyNotes ? geo.size.height : nil, alignment: .top)
@@ -368,6 +369,46 @@ struct MeetingDetailView: View {
             alignment: shouldCenterEmptyNotes ? .center : .leading)
     }
 
+    // MARK: - Transcript
+
+    /// Inline transcript empty-state. When the meeting has no transcript yet (and
+    /// isn't being recorded live — the live transcript lives in the floating
+    /// panel), show a placeholder so the document isn't silent about the missing
+    /// transcript. When a transcript exists it's read via the floating Granola
+    /// panel, so nothing renders inline here.
+    @ViewBuilder
+    private var transcriptSection: some View {
+        if isRecordingThisMeeting || hasTranscript {
+            EmptyView()
+        } else {
+            VStack(spacing: 10) {
+                Image(systemName: "text.bubble")
+                    .font(.system(size: 28, weight: .light))
+                    .foregroundStyle(Theme.tertiary(scheme))
+                Text("No transcript yet")
+                    .font(.nutola(13, .semibold))
+                    .foregroundStyle(Theme.secondary(scheme))
+                Text(transcriptEmptyMessage)
+                    .font(.nutola(11))
+                    .foregroundStyle(Theme.tertiary(scheme))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24)
+        }
+    }
+
+    private var transcriptEmptyMessage: String {
+        if isPrepMeeting {
+            return "The transcript will appear here once the meeting starts."
+        }
+        if meeting.duration > 0 {
+            return "Nutola recorded this meeting but didn't capture speech. Check that microphone access is on."
+        }
+        return "Record this meeting to capture a transcript."
+    }
+
     private var prepPlaceholder: some View {
         Text("Write notes")
             .font(.nutola(14))
@@ -437,6 +478,10 @@ struct MeetingDetailView: View {
 
     private var notesEditor: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // TODO(localization): "Cancel" and "Save" below (and "Edit notes" in
+            // notesEditMenu) are hardcoded English literals. SwiftPM has no
+            // Localizable.xcstrings, so they aren't localized yet. When
+            // localization lands, wrap them in LocalizedStringKey.
             HStack {
                 Spacer()
                 Button("Cancel") { notesDraft = nil }

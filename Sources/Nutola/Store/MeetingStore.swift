@@ -1,6 +1,14 @@
 import Foundation
 import SwiftUI
 
+/// A single meeting's search result across the transcript and summary.
+struct MeetingSearchResult: Identifiable {
+    let meeting: Meeting
+    let matchingSegments: [TranscriptSegment]
+    let summaryMatch: Bool
+    var id: UUID { meeting.id }
+}
+
 /// Observable, main-actor face of MeetingArchive for the UI.
 @MainActor
 final class MeetingStore: ObservableObject {
@@ -58,6 +66,29 @@ final class MeetingStore: ObservableObject {
 
     func saveSummary(_ markdown: String, for id: UUID) {
         try? archive.saveSummary(markdown, for: id)
+    }
+
+    /// Search across all meetings' transcripts and summaries for a query.
+    /// Returns meetings with matching segments/summaries, case-insensitive.
+    func searchAll(_ query: String) -> [MeetingSearchResult] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return [] }
+        var results: [MeetingSearchResult] = []
+        for meeting in meetings {
+            let segs = transcript(for: meeting.id)
+            let matchingSegments = segs.filter {
+                $0.text.localizedCaseInsensitiveContains(q)
+            }
+            let summaryText = summary(for: meeting.id)
+            let summaryMatch = summaryText.localizedCaseInsensitiveContains(q) && !summaryText.isEmpty
+            if !matchingSegments.isEmpty || summaryMatch {
+                results.append(MeetingSearchResult(
+                    meeting: meeting,
+                    matchingSegments: matchingSegments,
+                    summaryMatch: summaryMatch))
+            }
+        }
+        return results.sorted { $0.matchingSegments.count > $1.matchingSegments.count }
     }
 
     func sideNotes(for id: UUID) -> String { archive.sideNotes(for: id) }

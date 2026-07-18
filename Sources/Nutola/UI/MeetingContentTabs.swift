@@ -58,12 +58,15 @@ struct NotesTab: View {
                 }
             } else {
                 ScrollView {
-                    MarkdownText(markdown: displayed)
-                        .frame(maxWidth: 660, alignment: .leading)
-                        .padding(14)
-                        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.cornerRadius))
-                        .padding(20)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 16) {
+                        ActionItemsPanel(meeting: meeting, summary: displayed)
+                        MarkdownText(markdown: displayed)
+                            .frame(maxWidth: 660, alignment: .leading)
+                            .padding(14)
+                            .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.cornerRadius))
+                    }
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }

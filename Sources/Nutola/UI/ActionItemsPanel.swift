@@ -12,9 +12,16 @@ struct ActionItemsPanel: View {
     @EnvironmentObject private var app: AppState
     @State private var isExpanded = true
     @State private var items: [ActionItem] = []
+    @State private var followups: [String: FollowupItem] = [:]
     @State private var remindersError: String?
     @State private var addedToReminders = false
     @State private var copiedToPasteboard = false
+
+    /// Follow-up reminder for an action item, keyed by the item's `key`
+    /// (checkbox text, lowercased). Returns nil when no due date was detected.
+    private func followup(for item: ActionItem) -> FollowupItem? {
+        followups[item.key]
+    }
 
     private var openItems: [ActionItem] { items.filter { !$0.isChecked } }
     private var completedItems: [ActionItem] { items.filter { $0.isChecked } }
@@ -138,12 +145,52 @@ struct ActionItemsPanel: View {
                 }
             }
             Spacer(minLength: 0)
+            if let followup = followup(for: item), let dueDate = followup.dueDate {
+                dueDateBadge(dueDate: dueDate, isOverdue: followup.isOverdue)
+            }
         }
         .padding(.vertical, 2)
     }
 
     private func parseItems() {
         items = ActionItemParser.parse(summary)
+        detectFollowups()
+    }
+
+    /// Resolve follow-up reminders for the parsed items by scanning the meeting
+    /// transcript for due-date phrases near each item's text. Keyed by item `key`
+    /// so re-parses stay matched across summary edits.
+    private func detectFollowups() {
+        guard !items.isEmpty else { followups = [:]; return }
+        let segments = app.store.transcript(for: meeting.id)
+        let transcript = segments.isEmpty
+            ? ""
+            : TranscriptFormatter.plainText(segments, speakers: meeting.speakers)
+        let detected = FollowupDetector.detect(from: transcript, actionItems: items)
+        // Key by the action item's `key` (lowercased checkbox text) so re-parses
+        // stay matched across summary edits; only items with a resolved due date
+        // are worth storing.
+        followups = Dictionary(
+            uniqueKeysWithValues: detected
+                .filter { $0.dueDate != nil }
+                .map { ($0.text.lowercased().trimmingCharacters(in: .whitespaces), $0) }
+        )
+    }
+
+    /// Small badge showing the resolved due date. Overdue items use red; upcoming
+    /// items use honey (or mint when the item is checked, to match the checkbox).
+    @ViewBuilder
+    private func dueDateBadge(dueDate: Date, isOverdue: Bool) -> some View {
+        let label = dueDate.formatted(date: .abbreviated, time: .omitted)
+        let color = isOverdue ? Color.red : Theme.honey(scheme)
+        Text(isOverdue ? "Overdue · \(label)" : label)
+            .font(.nutola(10, .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(color, in: Capsule())
+            .help(isOverdue ? "This follow-up is overdue" : "Due \(label)")
+            .accessibilityLabel(isOverdue ? "Overdue, due \(label)" : "Due \(label)")
     }
 
     private func copyActionItems() {

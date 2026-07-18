@@ -62,18 +62,22 @@ struct MeetingDetailView: View {
         .background(Theme.surface(scheme))
         .safeAreaInset(edge: .bottom) {
             if canContinueRecording {
-                // Resume recording is the primary action — show it at the bottom
-                // where it's most accessible, alongside Join Zoom if available.
                 VStack(spacing: 8) {
-                    Button {
-                        Task { await app.continueRecording(meetingID: meeting.id) }
-                    } label: {
-                        Label("Resume recording", systemImage: "mic.fill")
-                            .font(.nutola(13, .semibold))
-                            .frame(maxWidth: .infinity)
+                    HStack {
+                        Spacer()
+                        Button {
+                            Task { await app.continueRecording(meetingID: meeting.id) }
+                        } label: {
+                            Label("Resume recording", systemImage: "mic.fill")
+                                .font(.nutola(13, .semibold))
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.mint(scheme))
+                        .clipShape(Capsule())
+                        Spacer()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.mint(scheme))
                     if let join = joinConference, showProminentJoinButton {
                         ConferenceJoinButton(label: join.label, url: join.url, prominent: true)
                             .frame(maxWidth: 560)
@@ -81,12 +85,12 @@ struct MeetingDetailView: View {
                 }
                 .frame(maxWidth: 560)
                 .padding(.horizontal, 24)
-                .padding(.vertical, 12)
+                .padding(.bottom, 20)
             } else if let join = joinConference, showProminentJoinButton {
                 ConferenceJoinButton(label: join.label, url: join.url, prominent: true)
                     .frame(maxWidth: 560)
                     .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
+                    .padding(.bottom, 20)
             }
         }
         .task { await app.calendar.refreshAgenda() }

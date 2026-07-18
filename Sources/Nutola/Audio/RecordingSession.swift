@@ -6,6 +6,12 @@ import SwiftUI
 /// (missing permission, no tap grant) — a session is viable with at least one.
 @MainActor
 final class RecordingSession: ObservableObject {
+    /// Number of bars in the live mic level meter. Drives `micBarLevels` init.
+    private static let levelBarCount = 12
+    /// Seconds to wait for a non-silent system-audio signal before warning the
+    /// user that System Audio Recording may not be granted.
+    private static let systemSignalCheckInterval: TimeInterval = 15
+
     let meetingID: UUID
     let startedAt = Date()
     /// Elapsed time already on the meeting before this session (continue recording).
@@ -13,7 +19,7 @@ final class RecordingSession: ObservableObject {
     private let sourceApp: String?
 
     @Published private(set) var elapsed: TimeInterval = 0
-    @Published private(set) var micBarLevels: [Float] = Array(repeating: 0, count: 12)
+    @Published private(set) var micBarLevels: [Float] = Array(repeating: 0, count: levelBarCount)
     /// Rolling live transcript (finalized segments) + the current in-progress
     /// fragment, updated in real time while recording. A convenience surface — the
     /// accurate, diarized transcript is still produced post-hoc by the batch pipeline.
@@ -23,6 +29,14 @@ final class RecordingSession: ObservableObject {
     @Published private(set) var activeRemoteSpeaker: String?
     /// Zoom participant names captured at recording start, for the live UI.
     @Published private(set) var liveRoster: [String] = []
+    /// Set when the mic engine failed to restart after an audio route change
+    /// (e.g. AirPods connecting mid-recording), so the UI can warn that the mic
+    /// side of the recording has gone silent. Cleared on the next successful restart.
+    @Published private(set) var micRestartError: String?
+    /// Set by `stop()` when neither side of the recording captured any audio
+    /// (both mic and system file are zero bytes), so the UI can warn the user
+    /// their microphone and system audio settings need checking.
+    @Published private(set) var stopNotice: String?
     private(set) var micStarted = false
     private(set) var systemStarted = false
     /// True when the local participant is muted in Zoom — the mic buffer sink is
@@ -92,6 +106,11 @@ final class RecordingSession: ObservableObject {
             Task { @MainActor in self?.micBarLevels = levels }
         }
         mic.bufferSink = { [weak live] buffer in live?.feedMic(buffer) }
+        mic.onRestartFailure = { [weak self] error in
+            // The mic engine failed to restart after an audio route change —
+            // surface it so the UI can warn that the mic side went silent.
+            Task { @MainActor in self?.micRestartError = error.localizedDescription }
+        }
         tap.signalDetectedHandler = {
             AppSettings.markSystemAudioConfirmed()
             NutolaConsoleLog.recording("system audio confirmed — non-silent signal received")
@@ -159,11 +178,11 @@ final class RecordingSession: ObservableObject {
 
         if systemStarted {
             systemSignalCheck = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(15))
+                try? await Task.sleep(for: .seconds(Self.systemSignalCheckInterval))
                 guard !Task.isCancelled, let self, self.systemStarted, !self.tap.signalDetected else { return }
                 let input = MicRecorder.defaultInputDeviceName ?? "unknown"
                 NutolaConsoleLog.recording(
-                    "system audio still silent after 15s (input=\(input)) — grant System Audio Recording in Privacy & Security → System Audio Recording Only")
+                    "system audio still silent after \(Int(Self.systemSignalCheckInterval))s (input=\(input)) — grant System Audio Recording in Privacy & Security → System Audio Recording Only")
             }
         }
     }
@@ -231,7 +250,7 @@ final class RecordingSession: ObservableObject {
         LiveTranscriber.localSpeakerName = "You"
         LiveTranscriber.remoteSpeakerName = "Others"
         activeRemoteSpeaker = nil
-        micBarLevels = Array(repeating: 0, count: 12)
+        micBarLevels = Array(repeating: 0, count: Self.levelBarCount)
         let micURL = archive.micURL(for: meetingID)
         let systemURL = archive.systemURL(for: meetingID)
         let micHeard = micStarted ? mic.captureStats.receivedAnyBuffer : false
@@ -242,6 +261,12 @@ final class RecordingSession: ObservableObject {
         let systemBytes = (try? FileManager.default.attributesOfItem(atPath: systemURL.path)[.size] as? Int) ?? 0
         NutolaConsoleLog.recording(
             "capture files mic=\(micBytes)B system=\(systemBytes)B micSignal=\(micHeard) systemSignal=\(systemSignal)")
+        if micBytes == 0 && systemBytes == 0 {
+            stopNotice = "No audio was captured — check your microphone and system audio settings"
+            NutolaConsoleLog.recording("stop notice: no audio captured (both files empty)")
+        } else {
+            stopNotice = nil
+        }
         if let live = liveTranscriber {
             liveTranscriber = nil
             // This Task inherits the main actor. After the transcribers finalize,

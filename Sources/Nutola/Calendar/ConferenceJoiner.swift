@@ -6,9 +6,22 @@ enum ConferenceJoiner {
     @discardableResult
     static func open(_ url: URL) -> Bool {
         if let deeplink = deeplinkURL(for: url), isNativeAppInstalled(for: url) {
-            return NSWorkspace.shared.open(deeplink)
+            return openAndLog(url: deeplink, fallback: url)
         }
-        return NSWorkspace.shared.open(url)
+        return openAndLog(url: url, fallback: nil)
+    }
+
+    /// Opens the URL via NSWorkspace and logs a warning when the system can't
+    /// launch a handler — a silent `false` return is otherwise indistinguishable
+    /// from a missing app or a revoked launch.
+    @discardableResult
+    private static func openAndLog(url: URL, fallback: URL?) -> Bool {
+        let launched = NSWorkspace.shared.open(url)
+        if !launched {
+            NutolaConsoleLog.app("could not open \(url.absoluteString) via NSWorkspace"
+                + (fallback.map { " (tried deeplink; fallback was \($0.absoluteString))" } ?? ""))
+        }
+        return launched
     }
 
     /// Whether a native client is registered for this conference provider.

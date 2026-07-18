@@ -18,6 +18,9 @@ struct TalkTimeStatsBar: View {
                         detail
                     }
             }
+            // #20 — click target in addition to hover, with a disclosure
+            // chevron so the popover is discoverable as tappable.
+            .onTapGesture { showDetail.toggle() }
             .onHover { hovering in
                 if hovering { showDetail = true }
             }
@@ -49,10 +52,20 @@ struct TalkTimeStatsBar: View {
                         .font(.nutola(11, .medium))
                         .foregroundStyle(scheme == .dark ? .primary : Theme.cocoa)
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(stat.name) \(percentageLabel(stat))")
+                .accessibilityValue(detailLine(stat))
             }
+            // #20 — disclosure chevron that flips when the popover is open.
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Theme.tertiary(scheme))
+                .rotationEffect(.degrees(showDetail ? 90 : 0))
+                .animation(.easeOut(duration: 0.15), value: showDetail)
+                .accessibilityHidden(true)
         }
         .contentShape(Rectangle())
-        .help("Talk time per speaker — hover for details")
+        .help("Talk time per speaker — click or hover for details")
     }
 
     private var detail: some View {
@@ -61,10 +74,12 @@ struct TalkTimeStatsBar: View {
                 .font(.nutola(13, .semibold))
                 .foregroundStyle(Theme.tertiary(scheme))
             Divider()
-            ForEach(stats) { stat in
+            ForEach(Array(stats.enumerated()), id: \.element.id) { index, stat in
                 HStack {
+                    // #19 — use the per-speaker swatch color (matching the chips)
+                    // so the legend circles are identifiable by more than position.
                     Circle()
-                        .fill(actionColor)
+                        .fill(swatch(for: stat, at: index))
                         .frame(width: 8, height: 8)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(stat.name)

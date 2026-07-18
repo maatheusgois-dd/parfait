@@ -10,6 +10,7 @@ enum SidebarItem: Hashable {
 struct MainWindowView: View {
     @EnvironmentObject private var app: AppState
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.nutolaActionColor) private var actionColor
     @State private var selection: SidebarItem?
     @State private var presentedMeetingID: UUID?
     @State private var showNewFolder = false
@@ -79,16 +80,32 @@ struct MainWindowView: View {
 
     private var navSection: some View {
         Section {
-            Label("Coming up", systemImage: "calendar")
-                .font(.nutola(13, .medium))
-                .tag(SidebarItem.home)
-            Label("Meetings", systemImage: "list.bullet.rectangle")
-                .font(.nutola(13, .medium))
-                .tag(SidebarItem.meetings)
-            Label("Ask", systemImage: "bubble.left.and.text.bubble.right")
-                .font(.nutola(13, .medium))
-                .tag(SidebarItem.library)
+            sidebarRow(.home, label: "Coming up", icon: "calendar")
+            sidebarRow(.meetings, label: "Meetings", icon: "list.bullet.rectangle")
+            sidebarRow(.library, label: "Ask", icon: "bubble.left.and.text.bubble.right")
         }
+    }
+
+    /// #23 — A sidebar row with a rounded background highlight when selected,
+    /// so the active destination stands out more than the default subtle tint.
+    @ViewBuilder
+    private func sidebarRow(_ item: SidebarItem, label: String, icon: String) -> some View {
+        let isSelected = selection == item
+        Label(label, systemImage: icon)
+            .font(.nutola(13, .medium))
+            .foregroundStyle(isSelected ? Theme.heading(scheme) : Theme.secondary(scheme))
+            .tag(item)
+            .listRowBackground(
+                Group {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(actionColor.opacity(0.12))
+                    } else {
+                        Color.clear
+                    }
+                }
+            )
+            .listRowInsets(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
     }
 
     private var foldersSection: some View {

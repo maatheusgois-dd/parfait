@@ -77,6 +77,48 @@ struct FolderTitleRule: Codable, Equatable, Sendable {
     var updatedAt: Date
 }
 
+/// Detected conferencing app, derived from a meeting's `sourceApp` bundle id.
+/// Centralizes the bundle-id → display-name mapping so the same rules apply to
+/// list subtitles, detail tips, and any future surface.
+enum ConferenceSource: Sendable {
+    case granola
+    case zoom
+    case teams
+    case googleMeet
+    case webex
+    case slack
+    case facetime
+    case other(String)
+
+    /// Maps a `sourceApp` bundle id (case-insensitive substring match) to a
+    /// source. Returns nil when `sourceApp` is empty/nil. Unrecognized ids fall
+    /// back to `.other(sourceApp)`.
+    init?(sourceApp: String?) {
+        guard let raw = sourceApp?.lowercased(), !raw.isEmpty else { return nil }
+        if raw.contains("granola") { self = .granola }
+        else if raw.contains("zoom") { self = .zoom }
+        else if raw.contains("teams") { self = .teams }
+        else if raw.contains("meet") || raw.contains("google") { self = .googleMeet }
+        else if raw.contains("webex") { self = .webex }
+        else if raw.contains("slack") { self = .slack }
+        else if raw.contains("facetime") { self = .facetime }
+        else { self = .other(sourceApp!) }
+    }
+
+    /// Human-readable app name for list subtitles and tips.
+    var displayName: String {
+        switch self {
+        case .granola: return "Granola"
+        case .zoom: return "Zoom"
+        case .teams: return "Microsoft Teams"
+        case .googleMeet: return "Google Meet"
+        case .webex: return "Webex"
+        case .slack: return "Slack"
+        case .facetime: return "FaceTime"
+        case .other(let raw): return raw
+        }
+    }
+}
 extension Meeting {
     static func placeholderTitle(for date: Date) -> String {
         let f = DateFormatter()
@@ -108,15 +150,8 @@ extension Meeting {
     }
 
     /// Human-readable source for list subtitles (bundle IDs → app names).
+    /// Backed by `ConferenceSource` so the bundle-id → name mapping lives in one place.
     var displaySourceApp: String? {
-        guard let raw = sourceApp?.lowercased(), !raw.isEmpty else { return nil }
-        if raw.contains("granola") { return "Granola" }
-        if raw.contains("zoom") { return "Zoom" }
-        if raw.contains("teams") { return "Microsoft Teams" }
-        if raw.contains("meet") || raw.contains("google") { return "Google Meet" }
-        if raw.contains("webex") { return "Webex" }
-        if raw.contains("slack") { return "Slack" }
-        if raw.contains("facetime") { return "FaceTime" }
-        return sourceApp
+        ConferenceSource(sourceApp: sourceApp)?.displayName
     }
 }

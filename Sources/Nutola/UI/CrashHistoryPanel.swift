@@ -15,6 +15,7 @@ struct CrashHistoryPanel: View {
     @State private var crashes: [CrashDiagnosticLog.CrashRecord] = []
     @State private var selectedID: String?
     @State private var hoveredID: String?
+    @State private var showClearConfirm = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -28,6 +29,21 @@ struct CrashHistoryPanel: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear { reload() }
+        // #25 — confirmation before deleting all crash records, since Clear All
+        // looks similar to Copy All and the action is irreversible.
+        .confirmationDialog(
+            "Clear all crash records?",
+            isPresented: $showClearConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Clear All", role: .destructive) {
+                CrashDiagnosticLog.clearAllCrashes()
+                reload()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This permanently deletes all \(crashes.count) saved crash record\(crashes.count == 1 ? "" : "s"). This cannot be undone.")
+        }
     }
 
     // MARK: Header
@@ -49,14 +65,21 @@ struct CrashHistoryPanel: View {
                     .background(Theme.chip(scheme), in: Capsule())
             }
             Spacer()
-            toolbarButton("Refresh", icon: "arrow.clockwise") { reload() }
-            toolbarButton("Copy All", icon: "doc.on.doc", disabled: crashes.isEmpty) {
+            toolbarButton("Refresh", icon: "arrow.clockwise",
+                           hint: "Reload the crash history from disk") { reload() }
+            toolbarButton("Copy All", icon: "doc.on.doc", disabled: crashes.isEmpty,
+                           hint: "Copy every crash record to the clipboard") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(CrashDiagnosticLog.allCrashesText(), forType: .string)
             }
-            toolbarButton("Clear All", icon: "trash", tint: .red, disabled: crashes.isEmpty) {
-                CrashDiagnosticLog.clearAllCrashes()
-                reload()
+            toolbarButton("Export…", icon: "square.and.arrow.up", disabled: crashes.isEmpty,
+                           hint: "Save every crash record to a file") {
+                exportCrashes()
+            }
+            toolbarButton("Clear All", icon: "trash", tint: .red, disabled: crashes.isEmpty,
+                           role: .destructive,
+                           hint: "Delete every saved crash record") {
+                showClearConfirm = true
             }
         }
     }
@@ -66,19 +89,38 @@ struct CrashHistoryPanel: View {
         icon: String,
         tint: Color? = nil,
         disabled: Bool = false,
+        role: ButtonRole? = nil,
+        hint: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 3) {
-                Image(systemName: icon).font(.nutola(9))
-                Text(label).font(.nutola(10))
+        // #25 — Use Button(role:) when a role is set (e.g. .destructive) so the
+        // button is semantically marked for accessibility and appearance.
+        Group {
+            if let role {
+                Button(role: role, action: action) {
+                    toolbarButtonLabel(icon: icon, label: label, tint: tint)
+                }
+            } else {
+                Button(action: action) {
+                    toolbarButtonLabel(icon: icon, label: label, tint: tint)
+                }
             }
-            .foregroundStyle(tint ?? Theme.blueberry(scheme))
         }
         .buttonStyle(.plain)
         .disabled(disabled)
         .opacity(disabled ? 0.4 : 1)
         .help(label)
+        .accessibilityLabel(label)
+        .accessibilityHint(hint ?? label)
+    }
+
+    @ViewBuilder
+    private func toolbarButtonLabel(icon: String, label: String, tint: Color?) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon).font(.nutola(9))
+            Text(label).font(.nutola(10))
+        }
+        .foregroundStyle(tint ?? Theme.blueberry(scheme))
     }
 
     // MARK: Empty state
@@ -250,5 +292,15 @@ struct CrashHistoryPanel: View {
         if !crashes.contains(where: { $0.id == selectedID }) {
             selectedID = crashes.first?.id
         }
+    }
+
+    private func exportCrashes() {
+        let panel = NSSavePanel()
+        panel.title = "Export Crash History"
+        panel.nameFieldStringValue = "nutola-crash-history.txt"
+        panel.allowedContentTypes = [.plainText]
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        let text = CrashDiagnosticLog.allCrashesText()
+        try? text.data(using: .utf8)?.write(to: dest, options: .atomic)
     }
 }

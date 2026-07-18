@@ -18,6 +18,11 @@ final class MeetingDetector: @unchecked Sendable {
     private var onEvent: (@Sendable (MicEvent) -> Void)?
     private var processListeners: [AudioObjectID: AudioObjectPropertyListenerBlock] = [:]
     private var lastState: [AudioObjectID: (pid: pid_t, running: Bool)] = [:]
+    /// Cached process object list from the last poll. When the Core Audio
+    /// process list is unchanged between polls (the common steady state), the
+    /// add/remove listener bookkeeping is skipped — only the per-object
+    /// `evaluate()` re-scan (needed for in-place IsRunningInput flips) runs.
+    private var lastProcessSet: Set<AudioObjectID> = []
     private var systemListener: AudioObjectPropertyListenerBlock?
     private var pollTimer: DispatchSourceTimer?
     private let ownPID = getpid()
@@ -71,6 +76,7 @@ final class MeetingDetector: @unchecked Sendable {
             }
             self.processListeners.removeAll()
             self.lastState.removeAll()
+            self.lastProcessSet.removeAll()
             self.onEvent = nil
             NutolaConsoleLog.detection("Core Audio detector stopped")
         }
@@ -135,33 +141,45 @@ final class MeetingDetector: @unchecked Sendable {
 
     private func syncProcessList() {
         let current = Set(processObjectList())
-        let known = Set(processListeners.keys)
-        var runAddr = Self.address(kAudioProcessPropertyIsRunningInput)
+        // Steady state: when the Core Audio process list is unchanged since the
+        // last poll, no processes appeared or disappeared, so the add/remove
+        // listener bookkeeping (set diffs + listener register/unregister) is a
+        // no-op. Skip it entirely and only re-scan existing processes for in-place
+        // IsRunningInput flips (Zoom joining a call) — that re-scan is required and
+        // idempotent. This avoids two set constructions + two subtracting passes
+        // per poll during a long, stable meeting.
+        let listChanged = current != lastProcessSet
+        if listChanged {
+            let known = Set(processListeners.keys)
+            var runAddr = Self.address(kAudioProcessPropertyIsRunningInput)
 
-        for gone in known.subtracting(current) {
-            if let block = processListeners.removeValue(forKey: gone) {
-                // Removal errs harmlessly when the object died with its process.
-                AudioObjectRemovePropertyListenerBlock(gone, &runAddr, queue, block)
+            for gone in known.subtracting(current) {
+                if let block = processListeners.removeValue(forKey: gone) {
+                    // Removal errs harmlessly when the object died with its process.
+                    AudioObjectRemovePropertyListenerBlock(gone, &runAddr, queue, block)
+                }
+                // No final IsRunningInput=0 fires for a dead process — synthesize it.
+                if let state = lastState.removeValue(forKey: gone), state.running {
+                    emit(object: nil, pid: state.pid, running: false)
+                }
             }
-            // No final IsRunningInput=0 fires for a dead process — synthesize it.
-            if let state = lastState.removeValue(forKey: gone), state.running {
-                emit(object: nil, pid: state.pid, running: false)
+
+            for added in current.subtracting(known) {
+                let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                    self?.evaluate(added)
+                }
+                if AudioObjectAddPropertyListenerBlock(added, &runAddr, queue, block) == noErr {
+                    processListeners[added] = block
+                }
             }
+            lastProcessSet = current
         }
 
-        for added in current.subtracting(known) {
-            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-                self?.evaluate(added)
-            }
-            if AudioObjectAddPropertyListenerBlock(added, &runAddr, queue, block) == noErr {
-                processListeners[added] = block
-            }
-        }
-
-        // Re-check EVERY current process, not just newly-added ones: an app that flips
-        // IsRunningInput in place (Zoom joining a call) never hits the add/remove path, and
-        // its per-process listener doesn't fire on macOS 26. evaluate() only emits on a real
-        // transition, so re-scanning every object each poll is cheap and idempotent.
+        // Always re-check EVERY current process, not just newly-added ones: an app
+        // that flips IsRunningInput in place (Zoom joining a call) never hits the
+        // add/remove path, and its per-process listener doesn't fire on macOS 26.
+        // evaluate() only emits on a real transition, so re-scanning every object
+        // each poll is cheap and idempotent.
         for object in current {
             evaluate(object)
         }

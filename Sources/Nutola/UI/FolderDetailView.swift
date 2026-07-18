@@ -29,6 +29,13 @@ struct FolderDetailView: View {
         app.folders.meetings(in: folderID, from: app.store)
     }
 
+    /// #21 — Whether the folder has a non-empty description, used to compute
+    /// top padding (tighter when there's no description line below the title).
+    private var hasDescription: Bool {
+        let d = folder?.description ?? descriptionText
+        return !d.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
         GeometryReader { geo in
             ScrollView {
@@ -36,7 +43,9 @@ struct FolderDetailView: View {
                     header
                     notesSection
                 }
-                .padding(24)
+                .padding(.top, hasDescription ? 24 : 16)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
                 .contentColumn()
                 .frame(minHeight: meetings.isEmpty ? geo.size.height : nil, alignment: .top)
             }
@@ -154,7 +163,12 @@ struct FolderDetailView: View {
             if meetings.isEmpty {
                 EmptyStateView(
                     title: "No meetings yet",
-                    message: "Record a meeting or add an existing one from your library.")
+                    message: "This folder is empty. Add meetings to keep related notes together.",
+                    tips: [
+                        "Drag meetings here from the Meetings list",
+                        "Use “Add existing” to pick from your library",
+                        "Right-click a meeting and choose “Move to folder”"
+                    ])
             } else {
                 VStack(spacing: 0) {
                     ForEach(meetings) { meeting in

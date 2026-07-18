@@ -53,6 +53,47 @@ final class MeetingArchive: @unchecked Sendable {
         return d
     }()
 
+    // MARK: - Transcript decode cache
+
+    /// In-memory cache of decoded transcripts, keyed by meeting id and
+    /// validated against the transcript file's mtime. Repeated searches (and
+    /// `transcript(for:)` reads) hit this instead of re-decoding thousands of
+    /// `TranscriptSegment`s from JSON every time. All access is on `queue`, so
+    /// no extra locking is needed; `NSCache` would require bridging value types,
+    /// so a plain Dictionary keyed by UUID is simpler and bounded by the number
+    /// of meetings (a few hundred at most).
+    private var transcriptCache: [UUID: (mtime: Date, segments: [TranscriptSegment])] = [:]
+
+    /// Returns the decoded transcript for `id`, using the in-memory cache when
+    /// the on-disk `transcript.json` hasn't changed since the last decode.
+    /// Runs on `queue`. Returns `nil` when there's no transcript file.
+    private func cachedTranscript(for id: UUID) -> [TranscriptSegment]? {
+        let url = folder(for: id).appendingPathComponent("transcript.json")
+        guard let mtime = try? FileManager.default
+            .attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+        else {
+            transcriptCache.removeValue(forKey: id)
+            return nil
+        }
+        if let cached = transcriptCache[id], cached.mtime == mtime {
+            return cached.segments
+        }
+        guard let data = try? Data(contentsOf: url),
+              let segments = try? decoder.decode([TranscriptSegment].self, from: data)
+        else {
+            transcriptCache.removeValue(forKey: id)
+            return nil
+        }
+        transcriptCache[id] = (mtime, segments)
+        return segments
+    }
+
+    /// Invalidates the cached transcript for `id` (e.g. after a re-transcribe
+    /// or delete). Runs on `queue`.
+    private func invalidateTranscriptCache(for id: UUID) {
+        transcriptCache.removeValue(forKey: id)
+    }
+
     init(root: URL = MeetingArchive.defaultRoot) {
         self.root = root
         try? FileManager.default.createDirectory(at: meetingsDir, withIntermediateDirectories: true)
@@ -69,16 +110,38 @@ final class MeetingArchive: @unchecked Sendable {
     // MARK: - Meetings
 
     func allMeetings() -> [Meeting] {
-        queue.sync {
-            let dirs = (try? FileManager.default.contentsOfDirectory(
-                at: meetingsDir, includingPropertiesForKeys: nil)) ?? []
-            return dirs.compactMap { dir in
-                guard let data = try? Data(contentsOf: dir.appendingPathComponent("meeting.json"))
-                else { return nil }
-                return try? decoder.decode(Meeting.self, from: data)
+        queue.sync { decodeMeetingsIn(meetingsDir) }
+    }
+
+    /// Async, off-the-caller-thread variant of `allMeetings()`: enumerates the
+    /// meetings folder and decodes `meeting.json` on a background priority,
+    /// returning via async/await. Callers already on the @MainActor (the UI
+    /// reload path) use this so the folder scan + JSON decode never blocks the
+    /// main thread. The work still serializes on `queue` for thread-safety with
+    /// concurrent writers; only the *await* is suspended off the main thread.
+    func allMeetingsAsync() async -> [Meeting] {
+        let dir = meetingsDir
+        return await Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return [] }
+            return await withCheckedContinuation { continuation in
+                self.queue.async {
+                    continuation.resume(returning: self.decodeMeetingsIn(dir))
+                }
             }
-            .sorted { $0.createdAt > $1.createdAt }
+        }.value
+    }
+
+    /// Enumerates `dir` for meeting subfolders and decodes `meeting.json` in
+    /// each, newest-first by `createdAt`. Runs on `queue`.
+    private func decodeMeetingsIn(_ dir: URL) -> [Meeting] {
+        let dirs = (try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil)) ?? []
+        return dirs.compactMap { dir in
+            guard let data = try? Data(contentsOf: dir.appendingPathComponent("meeting.json"))
+            else { return nil }
+            return try? decoder.decode(Meeting.self, from: data)
         }
+        .sorted { $0.createdAt > $1.createdAt }
     }
 
     func meeting(id: UUID) -> Meeting? {
@@ -91,6 +154,7 @@ final class MeetingArchive: @unchecked Sendable {
 
     enum ArchiveError: Error {
         case meetingDeleted
+        case encodingFailed
     }
 
     /// The meeting folder is created once, at recording start. Refusing to
@@ -113,26 +177,27 @@ final class MeetingArchive: @unchecked Sendable {
 
     func delete(id: UUID) throws {
         try queue.sync {
-            try FileManager.default.removeItem(at: folder(for: id))
+            // Idempotent: a double-delete (e.g. user trashed the folder from
+            // Finder between the pipeline and a late save) must not throw.
+            try? FileManager.default.removeItem(at: folder(for: id))
+            invalidateTranscriptCache(for: id)
         }
     }
 
     // MARK: - Transcript
 
     func transcript(for id: UUID) -> [TranscriptSegment] {
-        queue.sync {
-            guard let data = try? Data(contentsOf: folder(for: id).appendingPathComponent("transcript.json"))
-            else { return [] }
-            return (try? decoder.decode([TranscriptSegment].self, from: data)) ?? []
-        }
+        queue.sync { cachedTranscript(for: id) ?? [] }
     }
 
     func saveTranscript(_ segments: [TranscriptSegment], for id: UUID) throws {
         try queue.sync {
             let data = try encoder.encode(segments)
             try data.write(to: folder(for: id).appendingPathComponent("transcript.json"), options: .atomic)
+            invalidateTranscriptCache(for: id)
         }
     }
+
 
     // MARK: - Live transcript (present only while a meeting is recording)
 
@@ -207,8 +272,12 @@ final class MeetingArchive: @unchecked Sendable {
 
     func saveZoomRoster(_ names: [String], for id: UUID) {
         queue.sync {
-            guard let data = try? encoder.encode(names) else { return }
-            try? data.write(to: zoomRosterURL(for: id), options: .atomic)
+            do {
+                let data = try encoder.encode(names)
+                try data.write(to: zoomRosterURL(for: id), options: .atomic)
+            } catch {
+                NutolaConsoleLog.app("saveZoomRoster: could not persist roster — \(error.localizedDescription)")
+            }
         }
     }
 
@@ -234,8 +303,8 @@ final class MeetingArchive: @unchecked Sendable {
                !existing.isEmpty, existing != markdown {
                 snapshotSummary(existing, for: id)
             }
-            try markdown.data(using: .utf8)!
-                .write(to: summaryURL, options: .atomic)
+            guard let data = markdown.data(using: .utf8) else { throw ArchiveError.encodingFailed }
+            try data.write(to: summaryURL, options: .atomic)
         }
     }
 
@@ -255,12 +324,26 @@ final class MeetingArchive: @unchecked Sendable {
     /// `maxSummaryHistory`, oldest first.
     private func snapshotSummary(_ markdown: String, for id: UUID) {
         let dir = editsDir(for: id)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            NutolaConsoleLog.app("snapshotSummary: could not create Edits dir — \(error.localizedDescription)")
+            return
+        }
         let epochMS = Int64(Date().timeIntervalSince1970 * 1000)
         let nonce = String(UUID().uuidString.prefix(4))
         let name = "summary-\(epochMS)-\(nonce).md"
         let dest = dir.appendingPathComponent(name)
-        try? markdown.data(using: .utf8)!.write(to: dest, options: .atomic)
+        guard let data = markdown.data(using: .utf8) else {
+            NutolaConsoleLog.app("snapshotSummary: could not encode summary as UTF-8")
+            return
+        }
+        do {
+            try data.write(to: dest, options: .atomic)
+        } catch {
+            NutolaConsoleLog.app("snapshotSummary: could not write snapshot — \(error.localizedDescription)")
+            return
+        }
         pruneSummaryHistory(for: id)
     }
 
@@ -402,17 +485,21 @@ final class MeetingArchive: @unchecked Sendable {
                     if excerpts.count < 6 { excerpts.append("Note: \(String(line).trimmingCharacters(in: .whitespaces))") }
                 }
             }
-            // Pre-filter: skip the transcript JSON decode entirely when the
-            // raw file bytes don't contain any query word. Reading the file as
-            // a String + lowercasing is far cheaper than decoding thousands of
-            // TranscriptSegment objects that would match nothing.
+            // Pre-filter: skip the transcript decode entirely when the raw file
+            // bytes don't contain any query word. Reading the file as a String +
+            // lowercasing is far cheaper than decoding thousands of
+            // TranscriptSegment objects that would match nothing. When the
+            // pre-filter passes, decode via the in-memory cache
+            // (`cachedTranscript`) so repeated searches reuse the decoded
+            // segments instead of re-parsing the JSON every query.
             let transcriptURL = folder(for: meeting.id).appendingPathComponent("transcript.json")
             if let rawData = try? Data(contentsOf: transcriptURL),
                let rawString = String(data: rawData, encoding: .utf8) {
                 let lowerRaw = rawString.lowercased()
                 if lowerWords.contains(where: { lowerRaw.contains($0) }) {
                     let speakerNames = Dictionary(uniqueKeysWithValues: meeting.speakers.map { ($0.id, $0.name) })
-                    for seg in (try? decoder.decode([TranscriptSegment].self, from: rawData)) ?? [] {
+                    let segments = queue.sync { cachedTranscript(for: meeting.id) ?? [] }
+                    for seg in segments {
                         let lower = seg.text.lowercased()
                         if lowerWords.contains(where: { lower.contains($0) }) {
                             score += 1
@@ -429,8 +516,21 @@ final class MeetingArchive: @unchecked Sendable {
         return hits.sorted { $0.score > $1.score }.prefix(limit).map { $0 }
     }
 
+    /// Cached formatter for elapsed-time "m:ss" timestamps (transcript turn labels,
+    /// search excerpts). `.positional` renders minute:second positionally; an empty
+    /// `zeroFormattingBehavior` leaves the leading minute unpadded (so "0:05" rather
+    /// than "00:05") while the positional style still pads the trailing seconds.
+    private static let elapsedFormatter: DateComponentsFormatter = {
+        let f = DateComponentsFormatter()
+        f.allowedUnits = [.minute, .second]
+        f.zeroFormattingBehavior = []
+        f.unitsStyle = .positional
+        return f
+    }()
+
     static func timestamp(_ t: TimeInterval) -> String {
-        let s = Int(t.rounded())
-        return String(format: "%d:%02d", s / 60, s % 60)
+        let s = max(Int(t.rounded()), 0)
+        let components = DateComponents(minute: s / 60, second: s % 60)
+        return elapsedFormatter.string(from: components) ?? "\(s / 60):\(String(format: "%02d", s % 60))"
     }
 }

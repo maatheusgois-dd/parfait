@@ -15,6 +15,10 @@ struct TranscriptReaderView: View {
     @State private var newName = ""
     @State private var searchText = ""
     @State private var searchMatchCount = 0
+    @State private var currentMatchIndex: Int? = nil
+    /// #17 — focus state for the search field, used to highlight the field
+    /// with a colored ring/background while the user is typing in it.
+    @FocusState private var searchFocused: Bool
     /// Pin state lives in a shared store; each turn card observes it via
     /// `PinToggleButton` so toggles re-render without a manual version bump.
     private var pins: PinnedSegmentsStore { .shared }
@@ -63,6 +67,14 @@ struct TranscriptReaderView: View {
         .sheet(item: $renaming) { speaker in
             renameSheet(speaker)
         }
+        .background {
+            Button("Next match") { goToNextMatch() }
+                .keyboardShortcut("g", modifiers: .command)
+                .hidden()
+            Button("Previous match") { goToPreviousMatch() }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .hidden()
+        }
     }
 
     private var toolbar: some View {
@@ -102,21 +114,41 @@ struct TranscriptReaderView: View {
     private var searchBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(Theme.tertiary(scheme))
+                .foregroundStyle(searchFocused ? actionColor : Theme.tertiary(scheme))
                 .font(.system(size: 12))
             TextField("Search transcript", text: $searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
+                .focused($searchFocused)
+                .accessibilityLabel("Search transcript")
                 .onChange(of: searchText) { _, newValue in
-                    searchMatchCount = TranscriptTurnBuilder.filter(turns: turns, by: newValue).count
+                    let matches = TranscriptTurnBuilder.filter(turns: turns, by: newValue)
+                    searchMatchCount = matches.count
+                    currentMatchIndex = matches.isEmpty ? nil : 0
                 }
             if !searchText.isEmpty {
-                Text("\(searchMatchCount) \(searchMatchCount == 1 ? "match" : "matches")")
+                Text(currentMatchLabel)
                     .font(.nutola(11))
                     .foregroundStyle(Theme.tertiary(scheme))
+                Button { goToPreviousMatch() } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.tertiary(scheme))
+                }
+                .buttonStyle(.plain)
+                .help("Previous match (⌘⇧G)")
+                Button { goToNextMatch() } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.tertiary(scheme))
+                }
+                .buttonStyle(.plain)
+                .help("Next match (⌘G)")
                 Button {
                     searchText = ""
                     searchMatchCount = 0
+                    currentMatchIndex = nil
+                    searchFocused = true
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(Theme.tertiary(scheme))
@@ -126,7 +158,17 @@ struct TranscriptReaderView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: 8))
+        // #17 — tint the field background and add a colored focus ring so the
+        // active search field is visually distinct from the surrounding card.
+        .background(
+            (searchFocused ? actionColor.opacity(0.08) : Theme.card(scheme)),
+            in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(
+                    searchFocused ? actionColor.opacity(0.45) : Color.primary.opacity(0.06),
+                    lineWidth: searchFocused ? 1.5 : 1)
+        }
         .padding(.horizontal, 20)
         .padding(.bottom, 10)
     }
@@ -142,31 +184,47 @@ struct TranscriptReaderView: View {
     }
 
     private var turnsScroll: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                ForEach(filteredTurns) { turn in
-                    TranscriptTurnCard(
-                        turn: turn,
-                        speakerName: name(for: turn.speakerID),
-                        speakerColor: TranscriptTurnBuilder.speakerColor(
-                            speakerID: turn.speakerID,
-                            speakers: meeting.speakers,
-                            turns: turns,
-                            scheme: scheme),
-                        onRename: {
-                            newName = name(for: turn.speakerID)
-                            renaming = meeting.speakers.first { $0.id == turn.speakerID }
-                                ?? Speaker(id: turn.speakerID, name: name(for: turn.speakerID))
-                        })
-                        .overlay(alignment: .topTrailing) {
-                            pinButton(for: turn)
-                        }
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(filteredTurns.enumerated()), id: \.element.id) { idx, turn in
+                        turnRow(turn, isCurrentMatch: currentMatchIndex == idx && !searchText.isEmpty)
+                    }
                 }
+                .frame(maxWidth: 660, alignment: .leading)
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: 660, alignment: .leading)
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .onChange(of: currentMatchIndex) { _, idx in
+                guard let idx, idx < filteredTurns.count else { return }
+                withAnimation { proxy.scrollTo(filteredTurns[idx].id, anchor: .center) }
+            }
         }
+    }
+
+    @ViewBuilder
+    private func turnRow(_ turn: TranscriptTurn, isCurrentMatch: Bool) -> some View {
+        TranscriptTurnCard(
+            turn: turn,
+            speakerName: name(for: turn.speakerID),
+            speakerColor: TranscriptTurnBuilder.speakerColor(
+                speakerID: turn.speakerID,
+                speakers: meeting.speakers,
+                turns: turns,
+                scheme: scheme),
+            onRename: {
+                newName = name(for: turn.speakerID)
+                renaming = meeting.speakers.first { $0.id == turn.speakerID }
+                    ?? Speaker(id: turn.speakerID, name: name(for: turn.speakerID))
+            })
+        .id(turn.id)
+        .overlay(alignment: .topTrailing) {
+            pinButton(for: turn)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isCurrentMatch ? actionColor.opacity(0.12) : Color.clear))
+        .animation(.easeOut(duration: 0.15), value: currentMatchIndex)
     }
 
     @ViewBuilder
@@ -202,6 +260,30 @@ struct TranscriptReaderView: View {
 
     private func name(for speakerID: String) -> String {
         meeting.speakers.first { $0.id == speakerID }?.name ?? speakerID
+    }
+
+    private var currentMatchLabel: String {
+        guard searchMatchCount > 0 else { return "0 matches" }
+        let displayed = (currentMatchIndex ?? 0) + 1
+        return "\(displayed) of \(searchMatchCount)"
+    }
+
+    private func goToNextMatch() {
+        guard searchMatchCount > 0 else { return }
+        if let idx = currentMatchIndex, idx + 1 < searchMatchCount {
+            currentMatchIndex = idx + 1
+        } else {
+            currentMatchIndex = 0
+        }
+    }
+
+    private func goToPreviousMatch() {
+        guard searchMatchCount > 0 else { return }
+        if let idx = currentMatchIndex, idx > 0 {
+            currentMatchIndex = idx - 1
+        } else {
+            currentMatchIndex = searchMatchCount - 1
+        }
     }
 
     private func renameSheet(_ speaker: Speaker) -> some View {

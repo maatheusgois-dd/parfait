@@ -444,7 +444,7 @@ struct AILauncherView: View {
     }
 
     private var chatSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        LazyVStack(alignment: .leading, spacing: 14) {
             ForEach(messages) { message in
                 AskChatBubble(message: message)
             }

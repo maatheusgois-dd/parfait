@@ -39,6 +39,10 @@ final class AppState: NSObject, ObservableObject {
     @Published private(set) var streamingSummaries: [UUID: String] = [:]
     @Published private(set) var summaryProgress: [UUID: SummaryProgress] = [:]
     @Published private(set) var detectedAppName: String?
+    /// Last user-facing error message. Stored as `localizedDescription` (a String)
+    /// rather than the typed `Error` so SwiftUI can bind it directly; the original
+    /// error type is intentionally dropped — the message is for display, not retry
+    /// logic. Set to nil to clear the banner.
     @Published var lastError: String?
     @Published var openMeetingID: UUID?
     @Published private(set) var activeMicApps: [pid_t: String] = [:]
@@ -384,29 +388,57 @@ final class AppState: NSObject, ObservableObject {
     /// safely reset for the resumed recording without a write/read collision.
     private var orphanProcessTasks: [UUID: Task<Void, Never>] = [:]
 
+    /// Max number of orphans finalized at once. Each `process(_:)` run drives
+    /// transcription + a model call; running several in parallel could starve
+    /// the CPU/GPU and starve the foreground recording. 2 keeps recovery quick
+    /// without overwhelming the machine. (Was unbounded — a `Task` per orphan.)
+    private static let orphanFinalizeConcurrency = 2
+
     private func finalizeOrphans() {
         let orphans = store.meetings.filter { $0.state == .recording || $0.state == .processing }
-        if !orphans.isEmpty {
-            NutolaConsoleLog.processing("finalizing \(orphans.count) orphan meeting(s)")
-        }
+        if orphans.isEmpty { return }
+        NutolaConsoleLog.processing("finalizing \(orphans.count) orphan meeting(s)")
+        // Flip each to .processing SYNCHRONOUSLY, before any async work, so a
+        // detection-driven startRecording that races on the same launch can't see
+        // an orphan still in .recording and create a duplicate meeting for the same
+        // calendar event. .processing is not a live session — no RecordingSession
+        // holds it — so the resume matcher (which treats .processing as resumable
+        // when no session is live) can rejoin it.
+        var prepared: [Meeting] = []
         for meeting in orphans {
             var m = meeting
-            // Flip to .processing SYNCHRONOUSLY, before the async process task, so a
-            // detection-driven startRecording that races on the same launch can't
-            // see the orphan still in .recording and create a duplicate meeting for
-            // the same calendar event. .processing is not a live session — no
-            // RecordingSession holds it — so the resume matcher (which treats
-            // .processing as resumable when no session is live) can rejoin it.
             m.state = .processing
             if m.duration == 0 {
                 m.duration = audioDuration(archive: store.archive, id: m.id)
             }
             store.upsert(m)
-            let task = Task { await process(m) }
-            orphanProcessTasks[m.id] = task
-            Task { @MainActor in
-                await task.value
-                orphanProcessTasks[m.id] = nil
+            prepared.append(m)
+        }
+        // Run the (minutes-long) pipeline with bounded concurrency instead of
+        // launching a Task per orphan. A TaskGroup drains its children as they
+        // finish, but it runs all of them at once — so we throttle by handing the
+        // group at most `orphanFinalizeConcurrency` orphans per wave, awaiting the
+        // wave, then refilling. Each orphan keeps its own Task in
+        // `orphanProcessTasks` so `cancelOrphanProcessing` can still cancel it
+        // individually (e.g. when the user resumes that meeting).
+        Task { @MainActor in
+            var index = 0
+            while index < prepared.count {
+                let wave = prepared[index..<min(index + Self.orphanFinalizeConcurrency, prepared.count)]
+                index += wave.count
+                await withTaskGroup(of: Void.self) { group in
+                    for m in wave {
+                        let task = Task { await process(m) }
+                        orphanProcessTasks[m.id] = task
+                        group.addTask { @MainActor in
+                            await task.value
+                            self.orphanProcessTasks[m.id] = nil
+                        }
+                    }
+                    // The group awaits every child of this wave before the loop
+                    // refills it, capping concurrent pipelines at the wave size.
+                    await group.waitForAll()
+                }
             }
         }
     }

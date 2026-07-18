@@ -124,4 +124,90 @@ final class PlatformSpeakerTests: XCTestCase {
             ZoomActiveSpeakerReader.parseParticipantRow(
                 "Gui Lima, Computer audio unmuted, Video on"))
     }
+
+    // MARK: - #88: parser edge cases
+
+    func testParseSpeakingLabelEdgeCases() {
+        // Empty / whitespace-only input → nil (guard before regex).
+        XCTAssertNil(ZoomActiveSpeakerReader.parseSpeakingLabel(""))
+        XCTAssertNil(ZoomActiveSpeakerReader.parseSpeakingLabel("   "))
+        XCTAssertNil(ZoomActiveSpeakerReader.parseSpeakingLabel("\n\t"))
+
+        // Ignored exact-match strings (Zoom UI labels, not names).
+        XCTAssertNil(ZoomActiveSpeakerReader.parseSpeakingLabel("Mute"))
+        XCTAssertNil(ZoomActiveSpeakerReader.parseSpeakingLabel("Unmute"))
+        XCTAssertNil(ZoomActiveSpeakerReader.parseSpeakingLabel("Participants"))
+        XCTAssertNil(ZoomActiveSpeakerReader.parseSpeakingLabel("Host"))
+
+        // Single-character "names" fail the min-length (>= 2) check.
+        XCTAssertNil(ZoomActiveSpeakerReader.parseSpeakingLabel("A is speaking"))
+
+        // All-whitespace "names" are rejected by `cleaned`.
+        XCTAssertNil(ZoomActiveSpeakerReader.parseSpeakingLabel("    is speaking"))
+
+        // "zoom"-prefixed strings are rejected (Zoom UI, not a participant).
+        XCTAssertNil(ZoomActiveSpeakerReader.parseSpeakingLabel("Zoom Host is speaking"))
+
+        // Names with @ are rejected (looks like an email / meeting ID).
+        XCTAssertNil(ZoomActiveSpeakerReader.parseSpeakingLabel("user@example.com is speaking"))
+
+        // Each of the six supported label shapes must still parse.
+        XCTAssertEqual(ZoomActiveSpeakerReader.parseSpeakingLabel("Alice Rivera, unmuted"), "Alice Rivera")
+        XCTAssertEqual(ZoomActiveSpeakerReader.parseSpeakingLabel("Alice Rivera, unmuted audio"), "Alice Rivera")
+        XCTAssertEqual(ZoomActiveSpeakerReader.parseSpeakingLabel("Bob is speaking"), "Bob")
+        XCTAssertEqual(ZoomActiveSpeakerReader.parseSpeakingLabel("Bob is talking"), "Bob")
+        XCTAssertEqual(ZoomActiveSpeakerReader.parseSpeakingLabel("Speaking: Carol"), "Carol")
+        XCTAssertEqual(ZoomActiveSpeakerReader.parseSpeakingLabel("Active Speaker: Dan"), "Dan")
+        XCTAssertEqual(ZoomActiveSpeakerReader.parseSpeakingLabel("Eve, speaking"), "Eve")
+
+        // Case-insensitive: "SPEAKING:" prefix matches.
+        XCTAssertEqual(ZoomActiveSpeakerReader.parseSpeakingLabel("SPEAKING: Frank"), "Frank")
+
+        // Gallery tile descriptions (with "Computer audio" / "Video on") are
+        // roster metadata, NOT speaking labels — must be rejected.
+        XCTAssertNil(ZoomActiveSpeakerReader.parseSpeakingLabel(
+            "Gui Lima, Computer audio unmuted, Video on"))
+        XCTAssertNil(ZoomActiveSpeakerReader.parseSpeakingLabel(
+            "Acquila Santos Rocha, Computer audio unmuted, Video on, active speaker"))
+    }
+
+    func testParseZoomCaptionLineEdgeCases() {
+        // Empty / whitespace-only input → nil.
+        XCTAssertNil(ZoomActiveSpeakerReader.parseZoomCaptionLine(""))
+        XCTAssertNil(ZoomActiveSpeakerReader.parseZoomCaptionLine("   \n  "))
+
+        // Ignored exact-match names (Zoom UI labels) → nil.
+        XCTAssertNil(ZoomActiveSpeakerReader.parseZoomCaptionLine("Mute"))
+        XCTAssertNil(ZoomActiveSpeakerReader.parseZoomCaptionLine("Participants: hello"))
+
+        // Tile descriptions are NOT caption lines (contain "Computer audio").
+        XCTAssertNil(ZoomActiveSpeakerReader.parseZoomCaptionLine(
+            "Gui Lima, Computer audio unmuted, Video on"))
+
+        // Body too short (< 2 chars) → nil. The caption must have real content
+        // after the colon, not just punctuation.
+        XCTAssertNil(ZoomActiveSpeakerReader.parseZoomCaptionLine("Alice: "))
+        XCTAssertNil(ZoomActiveSpeakerReader.parseZoomCaptionLine("Alice: x"))
+
+        // Well-formed caption lines parse name + body.
+        let caption = ZoomActiveSpeakerReader.parseZoomCaptionLine("Gui Lima: hello everyone")
+        XCTAssertEqual(caption?.name, "Gui Lima")
+        XCTAssertEqual(caption?.text, "hello everyone")
+
+        // "said:" variant captures a different speaker prefix.
+        let said = ZoomActiveSpeakerReader.parseZoomCaptionLine("Paulo said: let's ship it")
+        XCTAssertEqual(said?.name, "Paulo")
+        XCTAssertEqual(said?.text, "let's ship it")
+
+        // Surrounding whitespace on the raw line is trimmed before matching.
+        let trimmed = ZoomActiveSpeakerReader.parseZoomCaptionLine("  Bob Chen: hi there  ")
+        XCTAssertEqual(trimmed?.name, "Bob Chen")
+        XCTAssertEqual(trimmed?.text, "hi there")
+
+        // Single-character "name" → nil (min-length 2 in `cleaned`).
+        XCTAssertNil(ZoomActiveSpeakerReader.parseZoomCaptionLine("A: hello there"))
+
+        // All-numeric "name" (a phone/meeting ID) → nil.
+        XCTAssertNil(ZoomActiveSpeakerReader.parseZoomCaptionLine("12345: hello there"))
+    }
 }

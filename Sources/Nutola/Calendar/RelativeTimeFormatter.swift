@@ -41,6 +41,27 @@ enum RelativeTimeFormatter {
         if minutes == 0 { return "\(hours)h" }
         return "\(hours)h \(minutes)m"
     }
+
+    /// Localized, natural-language relative time for contexts that aren't
+    /// space-constrained (crash history, past meeting timestamps) — backed by
+    /// `RelativeDateTimeFormatter` so the result respects the user's locale
+    /// ("in 52 minutes", "2 hours ago") rather than the compact menu-bar form.
+    /// The compact `compact(_:)/startsIn/until/endsIn/left` APIs above stay
+    /// hand-rolled because the menu-bar slot needs the tight "52m"/"2h 15m"
+    /// shape their tests pin down, which `RelativeDateTimeFormatter` doesn't
+    /// reproduce — those remain the custom edge cases.
+    private static let naturalFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+
+    /// "in 52 min" / "2 hr ago" — localized relative time for a past or future
+    /// date. `RelativeDateTimeFormatter` returns "" when `date == now`, so callers
+    /// wanting a guaranteed non-empty value should treat "" as "just now".
+    static func naturalRelative(to date: Date, now: Date = .now) -> String {
+        naturalFormatter.localizedString(for: date, relativeTo: now)
+    }
 }
 
 enum CalendarTimeFormatter {

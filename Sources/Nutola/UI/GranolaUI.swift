@@ -39,6 +39,7 @@ enum GranolaPanelMode: Equatable {
 struct GranolaFloatingPanel: View {
     @EnvironmentObject private var app: AppState
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.nutolaActionColor) private var actionColor
 
     let meeting: Meeting
@@ -98,7 +99,8 @@ struct GranolaFloatingPanel: View {
         .shadow(color: .black.opacity(scheme == .dark ? 0.45 : 0.12), radius: 24, y: 8)
         .padding(.horizontal, 24)
         .padding(.bottom, 16)
-        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: mode)
+        // Respect "Reduce Motion": skip the spring when the user has it enabled.
+        .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86), value: mode)
         .onAppear { refreshAskAvailability() }
         .onReceive(NotificationCenter.default.publisher(for: .nutolaCLIAvailabilityChanged)) { _ in
             refreshAskAvailability()
@@ -265,7 +267,19 @@ struct GranolaFloatingPanel: View {
 
     private var askBody: some View {
         VStack(alignment: .leading, spacing: 0) {
-            panelHeader(title: nil)
+            panelHeader(leading: {
+                if !askInput.isEmpty {
+                    Button {
+                        askInput = ""
+                    } label: {
+                        Label("Clear", systemImage: "xmark.circle")
+                            .font(.nutola(11, .medium))
+                            .foregroundStyle(Theme.tertiary(scheme))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear the question")
+                }
+            }, title: nil)
 
             if canAskAboutMeeting {
                 VStack(alignment: .leading, spacing: 4) {
@@ -331,6 +345,8 @@ struct GranolaFloatingPanel: View {
                 canAskAboutMeeting
                     ? "Ask questions about this meeting"
                     : "Record or add notes before asking questions")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAddTraits(mode == .ask ? .isSelected : [])
 
             if showCollapsedResume {
                 Button {
@@ -408,7 +424,9 @@ struct GranolaFloatingPanel: View {
             mode = mode == .transcript ? nil : .transcript
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "waveform")
+                // Icon signals the listening state beyond color: waveform while
+                // the transcript is open, a resting moon when idle.
+                Image(systemName: mode == .transcript ? "waveform" : "moon.zzz")
                     .font(.system(size: 11, weight: .semibold))
                 Text("Transcript")
                     .font(.nutola(12, .medium))
@@ -416,6 +434,8 @@ struct GranolaFloatingPanel: View {
             .foregroundStyle(mode == .transcript ? Theme.mint(scheme) : Theme.secondary(scheme))
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(mode == .transcript ? .isSelected : [])
     }
 
     private var collapseButton: some View {
@@ -925,6 +945,7 @@ struct SideNotesPanel: View {
         HStack(spacing: 8) {
             if isRecording {
                 RecordDot()
+                    .accessibilityLabel("Nutola is listening")
             }
             Text("My notes")
                 .font(.nutola(13, .semibold))

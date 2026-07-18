@@ -14,6 +14,13 @@ enum CalendarAuthorization {
     }
 
     static func requestAccess() async -> Bool {
-        (try? await EKEventStore().requestFullAccessToEvents()) ?? false
+        do {
+            return try await EKEventStore().requestFullAccessToEvents()
+        } catch {
+            // Surface the underlying error instead of silently returning false, so
+            // a denied-but-not-user-denied state (corrupted store, etc.) is debuggable.
+            NutolaConsoleLog.calendar("calendar access request failed — \(error.localizedDescription)")
+            return false
+        }
     }
 }

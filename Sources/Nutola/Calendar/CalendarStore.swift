@@ -6,6 +6,10 @@ import Foundation
 @MainActor
 final class CalendarStore: ObservableObject {
     static let defaultFetchHorizonDays = 30
+    /// Max polls of `resetEventStoreAfterGrant` waiting for the TCC grant to propagate.
+    private static let maxResetAttempts = 5
+    /// Delay between polls in `resetEventStoreAfterGrant` (200 ms).
+    private static let resetRetryDelay: Duration = .milliseconds(200)
 
     @Published private(set) var agenda: [CalendarAgendaDay] = []
     @Published private(set) var isLoading = false
@@ -40,8 +44,13 @@ final class CalendarStore: ObservableObject {
     /// `authorizationStatus` propagation lag: the static status can flap between
     /// `.notDetermined` and `.fullAccess` right after the TCC grant.
     func resetEventStoreAfterGrant() async {
-        for _ in 0..<5 where !CalendarAuthorization.isAuthorized {
-            try? await Task.sleep(for: .milliseconds(200))
+        // Wait for the TCC grant to propagate to `CalendarAuthorization.isAuthorized`.
+        // The static status can flap between `.notDetermined` and `.fullAccess` right
+        // after the grant, so poll up to `maxResetAttempts` times — but exit as soon
+        // as it's ready rather than busy-waiting through the remaining iterations.
+        for _ in 0..<Self.maxResetAttempts {
+            guard !CalendarAuthorization.isAuthorized else { break }
+            try? await Task.sleep(for: Self.resetRetryDelay)
         }
         guard CalendarAuthorization.isAuthorized else { return }
         eventStore = EKEventStore()

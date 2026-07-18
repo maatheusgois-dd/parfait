@@ -39,6 +39,7 @@ final class TemplateStore: @unchecked Sendable {
     enum TemplateError: LocalizedError {
         case invalidName
         case nameTaken(String)
+        case encodingFailed
 
         var errorDescription: String? {
             switch self {
@@ -46,6 +47,8 @@ final class TemplateStore: @unchecked Sendable {
                 return "A template name can't contain “/” or “:”."
             case .nameTaken(let name):
                 return "A template named “\(name)” already exists."
+            case .encodingFailed:
+                return "The template body could not be encoded as UTF-8."
             }
         }
     }
@@ -58,7 +61,8 @@ final class TemplateStore: @unchecked Sendable {
     func save(_ template: SummaryTemplate) throws {
         guard Self.isValid(name: template.name) else { throw TemplateError.invalidName }
         let url = dir.appendingPathComponent(template.name + ".md")
-        try template.body.data(using: .utf8)!.write(to: url, options: .atomic)
+        guard let data = template.body.data(using: .utf8) else { throw TemplateError.encodingFailed }
+        try data.write(to: url, options: .atomic)
     }
 
     /// Rename with safety: reject invalid names, refuse to overwrite a different
@@ -78,7 +82,8 @@ final class TemplateStore: @unchecked Sendable {
         // write onto the case-variant keeps the old directory-entry case, so the
         // rename appears to do nothing. moveItem performs the actual case change.
         if oldName.lowercased() == newName.lowercased() {
-            try body.data(using: .utf8)!.write(to: oldURL, options: .atomic)
+            guard let data = body.data(using: .utf8) else { throw TemplateError.encodingFailed }
+            try data.write(to: oldURL, options: .atomic)
             try FileManager.default.moveItem(at: oldURL, to: newURL)
             return
         }

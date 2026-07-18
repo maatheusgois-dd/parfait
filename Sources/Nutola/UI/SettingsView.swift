@@ -47,6 +47,7 @@ private struct GeneralSettings: View {
     @State private var launchAtLogin = LaunchAtLogin.isOn
     @State private var systemAudioStatus = SystemAudioPermission.status()
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
+    @State private var showResetConfirm = false
 
     var body: some View {
         Form {
@@ -206,6 +207,25 @@ private struct GeneralSettings: View {
                     .font(.nutola(11))
                     .foregroundStyle(.secondary)
             }
+
+            Section("Reset") {
+                Button("Reset to Defaults", role: .destructive) {
+                    showResetConfirm = true
+                }
+                Text("Restores detection, recording, transcription, and appearance settings to their defaults. Meetings and notes are not affected.")
+                    .font(.nutola(11))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .confirmationDialog(
+            "Reset all settings to defaults?",
+            isPresented: $showResetConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Reset", role: .destructive) { resetToDefaults() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This restores detection, recording, transcription, and appearance preferences to their defaults. Your meetings and notes are not affected.")
         }
         .formStyle(.grouped)
         .onAppear {
@@ -253,6 +273,23 @@ private struct GeneralSettings: View {
     private func applyLaunchAtLogin() {
         try? LaunchAtLogin.set(launchAtLogin)
         launchAtLogin = LaunchAtLogin.isOn // reflect what actually took effect
+    }
+
+    private func resetToDefaults() {
+        detectMeetings = true
+        autoRecord = false
+        autoStopRecording = true
+        identifySpeakers = true
+        showLiveRecordingCard = true
+        defaultTemplate = "Meeting Notes"
+        openMainWindowAtLaunch = true
+        developerMode = false
+        crashDiagnostics = false
+        UserDefaults.standard.set(
+            AppearanceMode.system.rawValue, forKey: SettingsKey.appearanceMode)
+        UserDefaults.standard.set(
+            Theme.defaultActionColorHex, forKey: SettingsKey.actionColorHex)
+        NutolaConsoleLog.app("settings reset to defaults")
     }
 
     private func permissionRow(
@@ -437,10 +474,17 @@ private struct IntelligenceSettings: View {
     @State private var codexInstalled = false
     @State private var codexLoggedIn = false
     @State private var codexSetupAvailable = false
+    @State private var claudeVersion: String?
+    @State private var codexVersion: String?
     @AppStorage(SettingsKey.preferClaudeSummaries) private var preferClaudeSummaries = false
     @AppStorage(SettingsKey.preferredAIProvider) private var preferredAIProvider: AIProvider = .apple
     @AppStorage(SettingsKey.askDeliveryMode) private var askDeliveryMode: AskDeliveryMode = .cli
     @AppStorage(SettingsKey.askMaxTurns) private var askMaxTurns = 5
+
+    /// #15 — Path to the Claude Desktop MCP config file, centralized so the
+    /// path string and the derived URL stay in one place.
+    private static let claudeDesktopConfigPath =
+        "Library/Application Support/Claude/claude_desktop_config.json"
 
     private var cloudAssistantReady: Bool {
         switch preferredAIProvider {
@@ -463,6 +507,11 @@ private struct IntelligenceSettings: View {
                     ok: true,
                     title: "Speech transcription",
                     detail: "Apple's on-device speech model. English and Brazilian Portuguese are prepared automatically; other system languages download on first use.")
+            }
+
+            Section("CLI versions") {
+                versionRow(title: "Claude Code", version: claudeVersion, installed: claudeInstalled)
+                versionRow(title: "Codex CLI", version: codexVersion, installed: codexInstalled)
             }
 
             Section("Your Claude account") {
@@ -536,31 +585,39 @@ private struct IntelligenceSettings: View {
                 case .codex:
                     statusRow(
                         ok: codexInstalled && codexLoggedIn,
-                        title: codexInstalled
-                            ? (codexLoggedIn ? "Codex CLI — connected" : "Codex CLI — not logged in")
-                            : "Codex CLI — not installed",
-                        detail: codexInstalled
-                            ? (codexLoggedIn
-                                ? "Ask about your meetings from Codex once the nutola connector is set up."
-                                : "Run `codex login` once to enable this.")
-                            : "Install from chatgpt.com/codex to ask about your meetings through Codex.")
+                        title: aiProviderStatusDescription(
+                            provider: .codex, installed: codexInstalled, loggedIn: codexLoggedIn),
+                        detail: aiProviderStatusDescription(
+                            provider: .codex, installed: codexInstalled, loggedIn: codexLoggedIn,
+                            forDetail: true))
                 case .claude:
                     statusRow(
                         ok: claudeInstalled && claudeLoggedIn,
-                        title: claudeInstalled
-                            ? (claudeLoggedIn ? "Claude Code — connected" : "Claude Code — not logged in")
-                            : "Claude Code — not installed",
-                        detail: claudeInstalled
-                            ? (claudeLoggedIn
-                                ? "Ask about your meetings from Claude once the nutola connector is set up."
-                                : "Open Claude Code and log in once to enable this.")
-                            : "Install from claude.com/claude-code to ask about your meetings through Claude.")
+                        title: aiProviderStatusDescription(
+                            provider: .claude, installed: claudeInstalled, loggedIn: claudeLoggedIn),
+                        detail: aiProviderStatusDescription(
+                            provider: .claude, installed: claudeInstalled, loggedIn: claudeLoggedIn,
+                            forDetail: true))
                 }
             }
 
             if preferredAIProvider.isCloud {
                 Section("Connect \(preferredAIProvider.displayName) to your meetings") {
                     connectAIContent
+                }
+            }
+
+            Section("Token usage") {
+                TokenUsageChart()
+                Text("Approximate tokens used by summaries, titles, and Ask AI over the last 14 days. Counts are estimated (~4 chars/token) since the CLIs don't report billing-grade usage.")
+                    .font(.nutola(11))
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Spacer()
+                    Button("Clear history", role: .destructive) {
+                        TokenUsageTracker.shared.clear()
+                    }
+                    .controlSize(.small)
                 }
             }
         }
@@ -574,9 +631,13 @@ private struct IntelligenceSettings: View {
             Task.detached {
                 let loggedIn = ClaudeCLI.isLoggedIn()
                 let codexIn = CodexCLI.isLoggedIn()
+                let claudeV = ClaudeCLI.version()
+                let codexV = CodexCLI.version()
                 await MainActor.run {
                     claudeLoggedIn = loggedIn
                     codexLoggedIn = codexIn
+                    claudeVersion = claudeV
+                    codexVersion = codexV
                     logAssistantStatus()
                 }
             }
@@ -603,6 +664,50 @@ private struct IntelligenceSettings: View {
                 + ", ready: \(CodexCLI.isReady)")
     }
 
+    // #13 — Centralizes the "connected / not logged in / not installed" status
+    // strings that were previously inlined in the Ask AI switch block.
+    private func aiProviderStatusDescription(
+        provider: AIProvider, installed: Bool, loggedIn: Bool, forDetail: Bool = false
+    ) -> String {
+        switch provider {
+        case .apple:
+            if forDetail {
+                return AppleSummarizer.isAvailable
+                    ? "Summaries and titles run entirely on this Mac. Pick Claude or Codex above to ask about meetings in chat."
+                    : (AppleSummarizer.unavailableReason ?? "Unavailable on this Mac.")
+            }
+            return AppleSummarizer.isAvailable ? "Apple Intelligence — ready" : "Apple Intelligence — unavailable"
+        case .claude:
+            if !installed {
+                return forDetail
+                    ? "Install from claude.com/claude-code to ask about your meetings through Claude."
+                    : "Claude Code — not installed"
+            }
+            if !loggedIn {
+                return forDetail
+                    ? "Open Claude Code and log in once to enable this."
+                    : "Claude Code — not logged in"
+            }
+            return forDetail
+                ? "Ask about your meetings from Claude once the nutola connector is set up."
+                : "Claude Code — connected"
+        case .codex:
+            if !installed {
+                return forDetail
+                    ? "Install from chatgpt.com/codex to ask about your meetings through Codex."
+                    : "Codex CLI — not installed"
+            }
+            if !loggedIn {
+                return forDetail
+                    ? "Run `codex login` once to enable this."
+                    : "Codex CLI — not logged in"
+            }
+            return forDetail
+                ? "Ask about your meetings from Codex once the nutola connector is set up."
+                : "Codex CLI — connected"
+        }
+    }
+
     private var binaryPath: String {
         Bundle.main.executablePath ?? "/Applications/Nutola.app/Contents/MacOS/Nutola"
     }
@@ -626,7 +731,7 @@ private struct IntelligenceSettings: View {
 
     private var claudeDesktopConfigURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Claude/claude_desktop_config.json")
+            .appendingPathComponent(Self.claudeDesktopConfigPath)
     }
 
     private var codexConfigURL: URL {
@@ -773,6 +878,20 @@ private struct IntelligenceSettings: View {
             }
             Spacer()
             action()
+        }
+    }
+
+    /// #97 — read-only row showing the installed CLI version (or "not installed").
+    private func versionRow(title: String, version: String?, installed: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            StatusDot(ok: installed)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.nutola(12, .medium))
+                Text(installed ? (version ?? "Installed") : "Not installed")
+                    .font(.nutola(11))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
         }
     }
 }
@@ -948,6 +1067,16 @@ private struct AppearanceSettings: View {
                         }
                     }
                 ))
+                if actionColorHex != Theme.defaultActionColorHex {
+                    HStack {
+                        Spacer()
+                        Button("Reset to default") {
+                            actionColorHex = Theme.defaultActionColorHex
+                        }
+                        .controlSize(.small)
+                        .help("Reset the action color to the default Medium green")
+                    }
+                }
                 Text("Used for Record, Save, and other prominent buttons. Adjusted automatically for readable labels in each theme.")
                     .font(.nutola(11))
                     .foregroundStyle(.secondary)

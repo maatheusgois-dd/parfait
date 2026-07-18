@@ -24,16 +24,23 @@ enum ActionItemParser {
         var items: [ActionItem] = []
         for (index, line) in lines {
             let trimmed = String(line)
-            guard let match = try? pattern.wholeMatch(in: trimmed) else { continue }
-            let checkChar = String(match.1)
-            let isChecked = checkChar == "x" || checkChar == "X"
-            let body = String(match.2).trimmingCharacters(in: .whitespaces)
-            let (text, owner) = extractOwner(from: body)
-            items.append(ActionItem(
-                text: text,
-                owner: owner,
-                isChecked: isChecked,
-                lineNumber: index))
+            do {
+                guard let match = try pattern.wholeMatch(in: trimmed) else { continue }
+                let checkChar = String(match.1)
+                let isChecked = checkChar == "x" || checkChar == "X"
+                let body = String(match.2).trimmingCharacters(in: .whitespaces)
+                let (text, owner) = extractOwner(from: body)
+                items.append(ActionItem(
+                    text: text,
+                    owner: owner,
+                    isChecked: isChecked,
+                    lineNumber: index))
+            } catch {
+                // A malformed regex match on a single line shouldn't drop the whole
+                // document — log it and skip that line.
+                NutolaConsoleLog.intelligence("action item parse skipped line \(index): \(error.localizedDescription)")
+                continue
+            }
         }
         return items
     }

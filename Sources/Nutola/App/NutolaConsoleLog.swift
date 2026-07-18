@@ -5,7 +5,7 @@ import os
 /// subsystem `io.github.matheusgois-dd.Nutola`). When Developer mode is on,
 /// also mirrors to the in-app Debug panel and stderr.
 enum NutolaConsoleLog {
-    private static let zoom = Logger(subsystem: "io.github.matheusgois-dd.Nutola", category: "zoom-speakers")
+    private static let zoom = Logger(subsystem: "io.github.matheusgois-dd.Nutola", category: "platform")
     private static let recording = Logger(subsystem: "io.github.matheusgois-dd.Nutola", category: "recording")
     private static let pipeline = Logger(subsystem: "io.github.matheusgois-dd.Nutola", category: "pipeline")
     private static let detection = Logger(subsystem: "io.github.matheusgois-dd.Nutola", category: "detection")

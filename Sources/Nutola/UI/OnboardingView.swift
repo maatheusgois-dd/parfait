@@ -148,13 +148,18 @@ struct OnboardingView: View {
     }
 
     private var accessibilityRow: some View {
+        // #16 — Split the long paragraph into a concise body + a learn-more
+        // line, so the row is easier to scan than a wall of text.
         OnboardingStepRow(
             icon: "person.wave.2.fill",
             title: "Accessibility",
             required: false,
             detail: accessibilityTrusted
                 ? "Allowed — Nutola can read Zoom's active speaker to label who said what."
-                : "Optional — labels Zoom speakers by name instead of Speaker 1 / Speaker 2. Click Grant and enable Nutola in Settings.",
+                : "Labels Zoom speakers by name instead of Speaker 1 / Speaker 2.",
+            learnMore: accessibilityTrusted
+                ? nil
+                : "Click Grant, then enable Nutola under Privacy & Security → Accessibility.",
             ok: accessibilityTrusted
         ) {
             if !accessibilityTrusted {
@@ -162,6 +167,7 @@ struct OnboardingView: View {
                     AccessibilityPermission.request()
                 }
                 .controlSize(.small)
+                .accessibilityHint("Opens System Settings to enable Nutola in Accessibility")
             }
         }
     }
@@ -252,6 +258,9 @@ private struct OnboardingStepRow<Action: View>: View {
     let title: String
     let required: Bool
     let detail: String
+    /// #16 — optional smaller "learn more" line below the body, used to split
+    /// long descriptions into a concise title+body and a follow-up hint.
+    var learnMore: String? = nil
     let ok: Bool?          // nil = informational, no pass/fail
     @ViewBuilder let action: () -> Action
 
@@ -265,6 +274,12 @@ private struct OnboardingStepRow<Action: View>: View {
                     if !required { Chip(text: "Optional") }
                 }
                 Text(detail).font(.nutola(11)).foregroundStyle(.secondary)
+                if let learnMore {
+                    Text(learnMore)
+                        .font(.nutola(10))
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 8)
             action()

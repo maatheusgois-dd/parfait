@@ -18,6 +18,8 @@ struct NutolaApp: App {
         } label: {
             MenuBarLabel(
                 detecting: app.detectedAppName != nil,
+                isRecording: app.isRecording,
+                recordingElapsed: app.session?.elapsed ?? 0,
                 nextEvent: menuBarNextEvent)
         }
         .menuBarExtraStyle(.window)
@@ -85,33 +87,57 @@ enum MenuBarTitleTruncator {
     /// Total width budget for title + separator + countdown in the menu-bar slot.
     private static let textBudget: CGFloat = 148
 
+    /// Cached `label(for:)` output keyed by the event. The menu-bar label view
+    /// re-renders on every state change, but the upcoming event (title +
+    /// countdown) is usually unchanged between renders — memoizing avoids the
+    /// `boundingRect`/`size` width measurements on every redraw. Bounded to one
+    /// entry: only the most recent event is kept, which is what the menu bar
+    /// repeatedly asks for. `MenuBarUpcomingEvent` is `Equatable` so the key
+    /// comparison is exact.
+    private static var cachedEvent: MenuBarUpcomingEvent?
+    private static var cachedLabel: String?
+
     static func label(for event: MenuBarUpcomingEvent) -> String {
+        if let cached = cachedLabel, cachedEvent == event {
+            return cached
+        }
         let suffix = separator + event.countdown
         let titleBudget = max(textBudget - width(of: suffix) - spacing, 36)
         let title = truncate(event.title, maxWidth: titleBudget)
-        return title + suffix
+        let result = title + suffix
+        cachedEvent = event
+        cachedLabel = result
+        return result
     }
 
     private static func truncate(_ title: String, maxWidth: CGFloat) -> String {
         let attrs: [NSAttributedString.Key: Any] = [.font: font]
         let full = title as NSString
-        guard full.size(withAttributes: attrs).width > maxWidth else { return title }
+        let fullWidth = width(of: title)
+        guard fullWidth > maxWidth else { return title }
 
         let ellipsisWidth = (ellipsis as NSString).size(withAttributes: attrs).width
         let budget = max(maxWidth - ellipsisWidth, 0)
+        guard budget > 0 else { return ellipsis }
 
-        var lo = 0
-        var hi = title.count
-        while lo < hi {
-            let mid = (lo + hi + 1) / 2
-            let probe = full.substring(to: mid)
-            if (probe as NSString).size(withAttributes: attrs).width <= budget {
-                lo = mid
-            } else {
-                hi = mid - 1
-            }
+        // Estimate the longest fitting prefix proportionally from the full width,
+        // then correct by ±1 with a couple of measurements — one or two
+        // `boundingRect`/`size` calls instead of the old ~log2(n) substring
+        // probes, each of which allocated a fresh NSString. The estimate is
+        // bounded below by 0 and above by the title length, and the correction
+        // step guarantees we never overflow the budget.
+        let fraction = budget / fullWidth
+        var estimate = Int(CGFloat(full.length) * fraction)
+        estimate = max(0, min(estimate, full.length))
+        // Grow/shrink by one grapheme until we're at the widest prefix that fits.
+        while estimate + 1 <= full.length,
+              width(of: full.substring(to: estimate + 1)) <= budget {
+            estimate += 1
         }
-        return full.substring(to: lo) + ellipsis
+        while estimate > 0, width(of: full.substring(to: estimate)) > budget {
+            estimate -= 1
+        }
+        return full.substring(to: estimate) + ellipsis
     }
 
     private static func width(of text: String) -> CGFloat {
@@ -123,16 +149,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowObservers: [NSObjectProtocol] = []
     private var detectionPrompt: DetectionPromptController?
     private var recordingCard: RecordingCardController?
-
+    private var recordingShortcutMonitor: Any?
     func applicationDidFinishLaunching(_ notification: Notification) {
         registerApplicationIconWithLaunchServices()
         Task { @MainActor in AppState.shared.bootstrap() }
         observeWindowsForMenuBar()
+        installRecordingShortcutMonitor()
         // The floating "Record this meeting?" card on detection, and the live
         // recording card (transcript + Ask Claude live) while recording.
         MainActor.assumeIsolated {
             detectionPrompt = DetectionPromptController()
             recordingCard = RecordingCardController()
+        }
+    }
+
+    /// Global ⌃⌥R (Control+Option+R) toggle for recording — works regardless of
+    /// which window is key (or none, since Nutola is an accessory app most of the time).
+    private func installRecordingShortcutMonitor() {
+        recordingShortcutMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+            guard event.modifierFlags.contains([.control, .option]),
+                  event.keyCode == 15  // R
+            else { return }
+            MainActor.assumeIsolated {
+                let app = AppState.shared
+                if app.isRecording {
+                    Task { await app.stopRecording() }
+                } else {
+                    Task { await app.startRecording() }
+                }
+            }
         }
     }
 
@@ -185,10 +230,16 @@ struct MenuBarLabel: View {
     /// Swap in an attention glyph so the prompt is visible in the menu bar even if the
     /// notification was missed, quieted, or denied outright.
     var detecting: Bool = false
+    /// Recording is in progress — show a live elapsed-time badge (mm:ss) next to the
+    /// glyph so the user can tell at a glance that capture is running.
+    var isRecording: Bool = false
+    var recordingElapsed: TimeInterval = 0
     var nextEvent: MenuBarUpcomingEvent?
 
     var body: some View {
-        if detecting {
+        if isRecording {
+            recordingLabel
+        } else if detecting {
             Image(systemName: "waveform.badge.exclamationmark")
         } else if let nextEvent {
             upcomingEventLabel(nextEvent)
@@ -197,6 +248,31 @@ struct MenuBarLabel: View {
         } else {
             Image(systemName: "cup.and.saucer.fill")
         }
+    }
+
+    private var recordingLabel: some View {
+        HStack(spacing: 4) {
+            if let icon = Self.templateIcon {
+                Image(nsImage: icon)
+            }
+            Image(systemName: "circle.fill")
+                .font(.system(size: 7))
+                .foregroundStyle(.red)
+            Text(recordingElapsedString)
+                .font(.nutola(11, .semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+        }
+        .fixedSize()
+        .help("Recording in progress")
+    }
+
+    private var recordingElapsedString: String {
+        let s = Int(recordingElapsed)
+        if s >= 3600 {
+            return String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60)
+        }
+        return String(format: "%d:%02d", s / 60, s % 60)
     }
 
     private func upcomingEventLabel(_ event: MenuBarUpcomingEvent) -> some View {

@@ -57,33 +57,47 @@ enum AIAsk {
         let systemPrompt =
             "You are Nutola. Meeting data is appended below — answer immediately from it. "
             + "Never say you will look up, fetch, or call tools. Be concise."
+        let result: String
         switch provider {
         case .apple:
             let enriched = AskContextBuilder.enrichForAsk(prompt, limits: .onDevice)
-            return try await AppleSummarizer.answer(prompt: enriched, onDelta: onDelta)
+            result = try await AppleSummarizer.answer(prompt: enriched, onDelta: onDelta)
         case .claude:
             let enriched = AskContextBuilder.enrichForCLI(prompt)
             if let onDelta {
-                let result = try await ClaudeCLI.stream(
+                let run = try await ClaudeCLI.stream(
                     prompt: enriched,
                     systemPrompt: systemPrompt,
                     onDelta: onDelta
                 )
-                return result.text
+                result = run.text
+            } else {
+                let run = try await ClaudeCLI.run(
+                    prompt: enriched,
+                    systemPrompt: systemPrompt
+                )
+                result = run.text
             }
-            let result = try await ClaudeCLI.run(
-                prompt: enriched,
-                systemPrompt: systemPrompt
-            )
-            return result.text
         case .codex:
             let enriched = AskContextBuilder.enrichForCLI(prompt)
-            let result = try await CodexCLI.run(
+            let run = try await CodexCLI.run(
                 prompt: enriched,
                 systemPrompt: systemPrompt
             )
-            return result.text
+            result = run.text
         }
+        TokenUsageTracker.shared.record(
+            promptTokens: Self.estimateTokens(prompt),
+            completionTokens: Self.estimateTokens(result))
+        return result
+    }
+
+    /// Rough token estimate (~4 chars/token, the TN3193 heuristic AppleSummarizer
+    /// uses for the on-device model). The CLI/API results don't expose real token
+    /// counts, so we approximate to keep the usage chart populated — the
+    /// infrastructure is the point, not billing-grade accuracy.
+    private static func estimateTokens(_ text: String) -> Int {
+        max(text.count / 4, 1)
     }
 
     @discardableResult

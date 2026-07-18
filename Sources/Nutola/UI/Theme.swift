@@ -7,6 +7,9 @@ enum Theme {
     static let defaultActionColorHex = "#1A8917"
 
     static let cream = Color(red: 0.976, green: 0.969, blue: 0.957)          // #F9F7F4 Medium page
+    /// Card/panel surface — Medium's white (#FFFFFF). Kept fully opaque white
+    /// (rather than a deeper cream) so cards stay readable over the `cream`
+    /// page background in light mode; `creamDeep` is a name, not a darker shade.
     static let creamDeep = Color(red: 1.00, green: 1.00, blue: 1.00)         // #FFFFFF Medium cards
     static let raspberry = Color(red: 0.878, green: 0.224, blue: 0.420)     // #E0396B (preset)
     static let honey = Color(red: 0.949, green: 0.663, blue: 0.231)         // #F2A93B secondary

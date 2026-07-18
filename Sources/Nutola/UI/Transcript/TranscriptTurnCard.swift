@@ -12,6 +12,15 @@ struct TranscriptTurnCard: View {
     private let railWidth: CGFloat = 3
     private let cornerRadius: CGFloat = 12
 
+    /// #18 — First two letters of the speaker name, uppercased, for the
+    /// initials badge. Falls back to "?" for empty names.
+    private var speakerInitials: String {
+        let trimmed = speakerName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return "?" }
+        let prefix = trimmed.prefix(2)
+        return String(prefix).uppercased()
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             RoundedRectangle(cornerRadius: railWidth / 2)
@@ -22,6 +31,14 @@ struct TranscriptTurnCard: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
+                    // #18 — speaker initials badge (first 2 letters) so speakers
+                    // are distinguishable by more than just color.
+                    Text(speakerInitials)
+                        .font(.nutola(9, .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 18, height: 18)
+                        .background(speakerColor, in: Circle())
+                        .accessibilityHidden(true)
                     if let onRename {
                         Button(action: onRename) {
                             Text(speakerName)

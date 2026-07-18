@@ -119,4 +119,32 @@ final class ActionItemParserTests: XCTestCase {
         let items = ActionItemParser.parse("- [ ] Do something")
         XCTAssertEqual(items[0].key, "do something")
     }
+
+    // MARK: - #85: lines without checkbox patterns are skipped
+
+    func testNonMatchingLinesAreIgnored() {
+        // A paragraph of regular prose, headings, bullets, and dividers must
+        // produce zero action items — only checkbox lines like "- [ ]", "* [ ]",
+        // and "- [x]" match. Guards against the parser accidentally treating
+        // plain bullets or headings as tasks.
+        let markdown = """
+        # Meeting Notes
+
+        We discussed the roadmap and the Q4 OKRs.
+
+        - Attendees: Alice, Bob, Carol
+        - Date: 2026-07-18
+
+        ---
+
+        ## Discussion
+        * Topic A: backend refactor
+        - Topic B: launch timeline
+
+        Action item: ship the release (no checkbox, just prose)
+        TODO: refactor the API (no dash prefix)
+        """
+        let items = ActionItemParser.parse(markdown)
+        XCTAssertTrue(items.isEmpty, "Non-checkbox lines should produce no action items — got \(items)")
+    }
 }

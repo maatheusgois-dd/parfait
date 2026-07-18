@@ -42,6 +42,24 @@ enum CrashDiagnosticLog {
     private nonisolated(unsafe) static var crashesDirC: [CChar] = []
     private nonisolated(unsafe) static var versionC: [CChar] = []
 
+    // MARK: - Resolved paths (Foundation-safe contexts only)
+
+    /// The per-app Application Support directory (`…/Nutola`). Not used by the
+    /// signal handler, which reads the pre-computed C strings (`crashesDirC` etc.)
+    /// instead — Foundation is unsafe in a signal context.
+    private static var nutolaSupportDirectory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return base.appendingPathComponent("Nutola", isDirectory: true)
+    }
+
+    /// The crash-history directory (`…/Nutola/Crashes`). Centralizing it here
+    /// replaces the six repeated `base.appendingPathComponent("Nutola/Crashes")`
+    /// lookups across `writeRecord`/`allCrashes`/`text`/`pruneHistory`/`delete`/
+    /// `clearAllCrashes`.
+    private static var crashReportsDirectory: URL {
+        nutolaSupportDirectory.appendingPathComponent("Crashes", isDirectory: true)
+    }
+
     /// Installs the exception + signal handlers. Call once, early in `Bootstrap.main()`
     /// before `NutolaApp.main()`. No-op when the user hasn't opted in.
     static func install() {
@@ -259,11 +277,9 @@ enum CrashDiagnosticLog {
             "inFlight": inFlight,
         ]
         if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) {
-            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            let nutolaDir = base.appendingPathComponent("Nutola", isDirectory: true)
-            try? data.write(to: nutolaDir.appendingPathComponent("diagnostics.json"), options: .atomic)
+            try? data.write(to: nutolaSupportDirectory.appendingPathComponent("diagnostics.json"), options: .atomic)
             // Per-crash history: <Crashes>/crash-<epochMS>-exception.json
-            let crashesDir = nutolaDir.appendingPathComponent("Crashes", isDirectory: true)
+            let crashesDir = crashReportsDirectory
             try? FileManager.default.createDirectory(at: crashesDir, withIntermediateDirectories: true)
             let epochMS = Int64(Date().timeIntervalSince1970 * 1000)
             let name = "crash-\(epochMS)-exception.json"
@@ -286,8 +302,7 @@ enum CrashDiagnosticLog {
     }
     /// Lists every crash file in `Crashes/`, newest first. Empty when none.
     static func allCrashes() -> [CrashRecord] {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let crashesDir = base.appendingPathComponent("Nutola/Crashes", isDirectory: true)
+        let crashesDir = crashReportsDirectory
         guard let files = try? FileManager.default.contentsOfDirectory(at: crashesDir, includingPropertiesForKeys: nil)
             .filter({ $0.pathExtension == "json" && $0.lastPathComponent.hasPrefix("crash-") })
             .sorted(by: { $0.lastPathComponent > $1.lastPathComponent })
@@ -319,9 +334,7 @@ enum CrashDiagnosticLog {
 
     /// Full text of one crash record (the raw JSON, pretty), for the detail view.
     static func text(for record: CrashRecord) -> String {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let crashesDir = base.appendingPathComponent("Nutola/Crashes", isDirectory: true)
-        let url = crashesDir.appendingPathComponent(record.id)
+        let url = crashReportsDirectory.appendingPathComponent(record.id)
         guard let data = try? Data(contentsOf: url),
               let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         else { return "(unreadable crash record: \(record.id))" }
@@ -346,8 +359,7 @@ enum CrashDiagnosticLog {
     /// Removes the oldest crash files past the cap (20), keeping newest first.
     /// Safe to call from `install()` and after each `writeRecord`.
     private static func pruneHistory() {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let crashesDir = base.appendingPathComponent("Nutola/Crashes", isDirectory: true)
+        let crashesDir = crashReportsDirectory
         guard let files = try? FileManager.default.contentsOfDirectory(at: crashesDir, includingPropertiesForKeys: nil)
             .filter({ $0.pathExtension == "json" && $0.lastPathComponent.hasPrefix("crash-") })
             .sorted(by: { $0.lastPathComponent > $1.lastPathComponent })
@@ -360,15 +372,12 @@ enum CrashDiagnosticLog {
 
     /// Deletes one crash record file. Safe to call from the UI.
     static func delete(_ record: CrashRecord) {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let crashesDir = base.appendingPathComponent("Nutola/Crashes", isDirectory: true)
-        try? FileManager.default.removeItem(at: crashesDir.appendingPathComponent(record.id))
+        try? FileManager.default.removeItem(at: crashReportsDirectory.appendingPathComponent(record.id))
     }
 
     /// Deletes every recorded crash. Safe to call from the UI.
     static func clearAllCrashes() {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let crashesDir = base.appendingPathComponent("Nutola/Crashes", isDirectory: true)
+        let crashesDir = crashReportsDirectory
         guard let files = try? FileManager.default.contentsOfDirectory(at: crashesDir, includingPropertiesForKeys: nil)
             .filter({ $0.pathExtension == "json" && $0.lastPathComponent.hasPrefix("crash-") })
         else { return }

@@ -1,6 +1,12 @@
 import AppKit
 import SwiftUI
 
+// TODO(localization): The user-facing strings in this file ("Nutola", "Recording",
+// "Stop & summarize", "Open Nutola", "Quit Nutola?", etc.) are hardcoded English.
+// SwiftPM has no Localizable.xcstrings tooling, so they are not localized yet.
+// When localization infrastructure is added, wrap each Text/Label literal in
+// LocalizedStringKey and extract them via String(localized:).
+
 struct MenuBarView: View {
     @EnvironmentObject private var app: AppState
     @Environment(\.openWindow) private var openWindow
@@ -8,12 +14,17 @@ struct MenuBarView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.nutolaActionColor) private var actionColor
     @State private var showQuitConfirm = false
+    @State private var gearHovering = false
+    @State private var powerHovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
             if let session = app.session {
-                RecordingCard(session: session, meeting: app.recordingMeeting)
+                RecordingCard(session: session, meeting: app.recordingMeeting) {
+                    app.openMeetingID = session.meetingID
+                    openMain()
+                }
             } else if let detected = app.detectedAppName {
                 detectionBanner(detected)
             } else {
@@ -81,10 +92,14 @@ struct MenuBarView: View {
                         Image(systemName: "power")
                             .font(.nutola(13, .medium))
                             .foregroundStyle(.red)
-                            .frame(width: 28, height: 28)
+                            .frame(width: 30, height: 30)
+                            .background(
+                                powerHovering ? Color.red.opacity(0.15) : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 8))
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .onHover { powerHovering = $0 }
                     .help("Quit Nutola")
                 }
         }
@@ -194,6 +209,8 @@ struct MenuBarView: View {
     private var header: some View {
         HStack(spacing: 8) {
             NutolaStripes().scaleEffect(0.45).frame(width: 20, height: 26)
+                .accessibilityLabel("Nutola")
+                .accessibilityValue(menuBarStateValue)
             Text("Nutola")
                 .font(.nutola(16, .bold))
                 .foregroundStyle(Theme.heading(scheme))
@@ -204,10 +221,31 @@ struct MenuBarView: View {
                 NSApp.activate()
             } label: {
                 Image(systemName: "gearshape")
+                    .font(.nutola(14, .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        gearHovering ? Color.secondary.opacity(0.15) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 8))
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .onHover { gearHovering = $0 }
+            .help("Open Settings")
+            .accessibilityLabel("Settings")
+            .accessibilityHint("Open Nutola settings")
         }
+    }
+
+    /// Voice-over description of the current top-level state shown in the menu bar.
+    private var menuBarStateValue: String {
+        if app.isRecording { return "Recording" }
+        if app.detectedAppName != nil { return "Meeting detected" }
+        if app.resumableMeeting != nil { return "Recording can be resumed" }
+        if let first = upcomingDays.first?.events.first, first.isInProgress {
+            return "Meeting in progress"
+        }
+        return "Idle"
     }
 
     private func detectionBanner(_ appName: String) -> some View {
@@ -303,21 +341,31 @@ private struct MenuBarExtraWindowHook: NSViewRepresentable {
 private struct RecordingCard: View {
     @ObservedObject var session: RecordingSession
     let meeting: Meeting?
+    /// Invoked when the title row is tapped — opens the live meeting in the main window.
+    var onOpenMeeting: (() -> Void)? = nil
     @EnvironmentObject private var app: AppState
     @Environment(\.nutolaActionColor) private var actionColor
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                RecordDot()
-                Text(meeting?.title ?? "Recording")
-                    .font(.nutola(13, .semibold))
-                    .lineLimit(1)
-                Spacer()
-                Text(timeString(session.elapsed))
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(actionColor)
+            Button {
+                onOpenMeeting?()
+            } label: {
+                HStack {
+                    RecordDot()
+                    Text(meeting?.title ?? "Recording")
+                        .font(.nutola(13, .semibold))
+                        .lineLimit(1)
+                    Spacer()
+                    Text(timeString(session.elapsed))
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(actionColor)
+                }
+                .frame(minWidth: 44, minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .disabled(onOpenMeeting == nil)
+            .help(onOpenMeeting != nil ? "Open live transcript" : "")
             HStack(alignment: .bottom) {
                 LevelMeter(levels: session.micBarLevels)
                 Spacer()
@@ -345,6 +393,8 @@ private struct RecordingCard: View {
                 .buttonStyle(.bordered)
                 .tint(.red)
                 .help("Discard this recording")
+                .accessibilityLabel("Discard recording")
+                .accessibilityHint("Deletes the current recording and its transcript without saving")
             }
             if app.showLiveRecordingCard, app.recordingCardDismissed {
                 Button {

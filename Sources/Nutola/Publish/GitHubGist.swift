@@ -79,7 +79,10 @@ enum GitHubGist {
         defer { try? FileManager.default.removeItem(at: dir) }
         // The gist filename comes from the file on disk, so it must carry the real name.
         let file = dir.appendingPathComponent(filename)
-        try html.data(using: .utf8)!.write(to: file, options: .atomic)
+        guard let data = html.data(using: .utf8) else {
+            throw GistError.failed("Could not encode gist HTML as UTF-8.")
+        }
+        try data.write(to: file, options: .atomic)
 
         // gh prints progress to stderr and only the gist URL to stdout.
         let created = try await run(gh, ["gist", "create", file.path, "--desc", description])
@@ -100,7 +103,11 @@ enum GitHubGist {
         var data = Data()
         do {
             for try await byte in handle.bytes { data.append(byte) }
-        } catch {}
+        } catch {
+            // Surface the read failure rather than silently returning partial data,
+            // which would otherwise look like a truncated-but-valid gh response.
+            NutolaConsoleLog.app("gist readAll stream error — \(error.localizedDescription)")
+        }
         return data
     }
 

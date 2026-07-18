@@ -23,6 +23,8 @@ struct NotesTab: View {
                     .buttonStyle(.borderedProminent)
                     .tint(actionColor)
                 } else {
+                    // Direct Regenerate (one click) + template alternatives menu.
+                    regenerateButton
                     Button {
                         draft = app.store.summary(for: meeting.id)
                     } label: {
@@ -104,6 +106,8 @@ struct NotesTab: View {
         }
     }
 
+    /// Selected template, shown as a capsule "pill" so the active choice is
+    /// visible beyond the menu's text color (improvement #9).
     private var templateMenu: some View {
         Menu {
             ForEach(app.templates.list()) { template in
@@ -114,18 +118,39 @@ struct NotesTab: View {
                     }
                 }
             }
-            Divider()
-            Button("Regenerate with current template") {
-                Task { await app.regenerateSummary(meetingID: meeting.id) }
-            }
         } label: {
-            Label(meeting.templateName ?? AppSettings.defaultTemplate,
-                  systemImage: "doc.text")
-                .font(.nutola(12))
+            HStack(spacing: 4) {
+                Image(systemName: "doc.text")
+                Text(meeting.templateName ?? AppSettings.defaultTemplate)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.tertiary(scheme))
+            }
+            .font(.nutola(12))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                Theme.chip(scheme),
+                in: Capsule())
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("Rewrite the notes with a different template")
+    }
+
+    /// Direct "Regenerate" trigger — one click regenerates with the current
+    /// template (improvement #10). Template alternatives live in the trailing
+    /// `templateMenu` so they stay one hover away without adding a second click
+    /// to the common path.
+    private var regenerateButton: some View {
+        Button {
+            Task { await app.regenerateSummary(meetingID: meeting.id) }
+        } label: {
+            Label("Regenerate", systemImage: "arrow.clockwise")
+                .font(.nutola(12, .semibold))
+        }
+        .help("Regenerate notes with the current template")
+        .disabled(streaming != nil || app.processingStage[meeting.id] != nil)
     }
 }
 

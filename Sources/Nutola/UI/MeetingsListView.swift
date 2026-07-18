@@ -56,6 +56,16 @@ struct MeetingsListView: View {
                                         MeetingHistoryRow(meeting: meeting) {
                                             app.openMeetingID = meeting.id
                                         }
+                                        .help(meeting.title)
+                                        .contextMenu {
+                                            FolderPickerMenu(
+                                                currentFolderID: meeting.folderID,
+                                                calendarTitle: meeting.calendarEventTitle ?? meeting.title,
+                                                meetingID: meeting.id
+                                            ) {
+                                                Label("Move to Folder", systemImage: "folder")
+                                            }
+                                        }
                                         if meeting.id != group.meetings.last?.id {
                                             Divider().padding(.leading, 8)
                                         }

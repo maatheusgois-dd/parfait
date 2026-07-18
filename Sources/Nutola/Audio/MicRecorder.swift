@@ -31,6 +31,14 @@ final class MicRecorder: @unchecked Sendable {
         set { lock.lock(); defer { lock.unlock() }; _bufferSink = newValue }
     }
 
+    /// Invoked when an automatic restart (after an audio route / configuration
+    /// change) fails, so the owning `RecordingSession` can surface it to the user
+    /// rather than the failure being log-only.
+    var onRestartFailure: (@Sendable (Error) -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return _onRestartFailure }
+        set { lock.lock(); defer { lock.unlock() }; _onRestartFailure = newValue }
+    }
+
     static var permissionGranted: Bool {
         // AVAudioApplication is the correct TCC API for AVAudioEngine mic
         // access on macOS 14+. AVCaptureDevice.authorizationStatus(for: .audio)
@@ -239,6 +247,7 @@ final class MicRecorder: @unchecked Sendable {
     private let restartQueue = DispatchQueue(label: "nutola.mic-recorder.restart")
     private var _levelHandler: (@Sendable ([Float]) -> Void)?
     private var _bufferSink: (@Sendable (AVAudioPCMBuffer) -> Void)?
+    private var _onRestartFailure: (@Sendable (Error) -> Void)?
     private var engine: AVAudioEngine?
     private var file: AVAudioFile?
     private var converter: AVAudioConverter?
@@ -447,7 +456,11 @@ final class MicRecorder: @unchecked Sendable {
             try engine.start()
         } catch {
             NutolaConsoleLog.recording("mic restart after config change failed — \(error.localizedDescription)")
-            // No usable input right now; the next configuration change retries.
+            // Surface to the owning RecordingSession so the user can be told the mic
+            // went silent, instead of the failure being log-only. Snapshot the handler
+            // under the lock; the next configuration change still retries.
+            let handler = _onRestartFailure
+            DispatchQueue.main.async { handler?(error) }
         }
     }
 

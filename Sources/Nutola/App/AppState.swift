@@ -65,16 +65,14 @@ final class AppState: NSObject, ObservableObject {
         }
     }
 
-    /// True if the meeting's calendar event is still in progress (or has no
-    /// calendar event, in which case we err on the side of resumable for a
-    /// short grace period after the meeting was created).
+    /// True only if the meeting's calendar event is currently in progress.
+    /// Meetings without a calendar link are never auto-resumable from the
+    /// menu bar — the user should see "Start recording" instead.
     private func meetingIsStillLive(_ meeting: Meeting) -> Bool {
-        if let eventID = meeting.calendarEventID,
-           let event = calendar.event(id: eventID, start: meeting.calendarEventStart) {
-            return event.isInProgress
-        }
-        // No calendar link: allow resume within 30 minutes of creation.
-        return Date().timeIntervalSince(meeting.createdAt) < 1800
+        guard let eventID = meeting.calendarEventID,
+              let event = calendar.event(id: eventID, start: meeting.calendarEventStart)
+        else { return false }
+        return event.isInProgress
     }
 
     /// Resume the most recent resumable meeting, if any. Used by the menu bar's

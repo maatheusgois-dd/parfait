@@ -94,9 +94,11 @@ struct AILauncherView: View {
     @State private var messages: [AskChatMessage] = []
     @State private var loadingMessageID: UUID?
     @State private var answerTask: Task<Void, Never>?
+    @State private var didSaveRecipe = false
     @FocusState private var composeFocused: Bool
     @Environment(\.colorScheme) private var scheme
     @Environment(\.nutolaActionColor) private var actionColor
+    @StateObject private var recipeStore = RecipeStore()
 
     private var isConversationMode: Bool {
         !messages.isEmpty
@@ -111,7 +113,10 @@ struct AILauncherView: View {
             }
         }
         .background(Theme.surface(scheme))
-        .onAppear { refreshAvailability() }
+        .onAppear {
+            refreshAvailability()
+            seedRecipesFromSuggestionsIfNeeded()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .nutolaCLIAvailabilityChanged)) { _ in
             refreshAvailability()
         }
@@ -139,10 +144,9 @@ struct AILauncherView: View {
                     recentsSection
                 }
 
-                if !suggestions.isEmpty {
+                if !recipeStore.all().isEmpty {
                     recipesSection
                 }
-
                 footerNotices
             }
             .padding(.horizontal, 32)
@@ -259,6 +263,7 @@ struct AILauncherView: View {
 
             HStack(alignment: .center, spacing: 10) {
                 providerBadge
+                saveAsRecipeButton
                 Spacer(minLength: 8)
                 submitButton
             }
@@ -418,6 +423,26 @@ struct AILauncherView: View {
         }
     }
 
+    /// Small "Save as recipe" affordance next to the submit button. Only shown
+    /// when the user has typed something they could save; the checkmark flips
+    /// briefly after a save to confirm. Kept deliberately understated so it
+    /// doesn't compete with the submit arrow.
+    private var saveAsRecipeButton: some View {
+        let trimmed = input.trimmingCharacters(in: .whitespaces)
+        let canSave = !trimmed.isEmpty && !isAnswering
+        return Button(action: saveCurrentInputAsRecipe) {
+            Image(systemName: didSaveRecipe ? "checkmark" : "bookmark")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(didSaveRecipe ? actionColor : Theme.secondary(scheme))
+                .frame(width: 26, height: 26)
+        }
+        .buttonStyle(.plain)
+        .disabled(!canSave)
+        .opacity(canSave ? 1 : 0)
+        .help("Save as recipe")
+        .animation(.easeOut(duration: 0.18), value: didSaveRecipe)
+    }
+
     private var chatSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             ForEach(messages) { message in
@@ -482,13 +507,20 @@ struct AILauncherView: View {
                 .foregroundStyle(Theme.secondary(scheme))
 
             FlowLayout(spacing: 8) {
-                ForEach(suggestions, id: \.self) { suggestion in
-                    Button { launch(suggestion) } label: {
-                        RecipeChip(text: suggestion)
+                ForEach(recipeStore.all()) { recipe in
+                    Button {
+                        launch(recipe.prompt)
+                    } label: {
+                        RecipeChip(text: recipe.name)
                     }
                     .buttonStyle(.plain)
                     .disabled(!available || isAnswering)
                     .opacity(available && !isAnswering ? 1 : 0.45)
+                    .contextMenu {
+                        Button("Delete recipe", role: .destructive) {
+                            recipeStore.delete(id: recipe.id)
+                        }
+                    }
                 }
             }
         }
@@ -707,6 +739,29 @@ struct AILauncherView: View {
         guard !text.isEmpty, !isAnswering else { return }
         input = ""
         launch(text)
+    }
+
+    /// One-shot seed: the first time the launcher appears, copy the built-in
+    /// `suggestions` into the user's recipe library so the chips look exactly
+    /// as before this feature. Gated by a UserDefaults flag (`didSeedRecipes`)
+    /// rather than "library is empty" so a user who deletes every recipe
+    /// doesn't get the defaults silently re-added on the next appear.
+    private func seedRecipesFromSuggestionsIfNeeded() {
+        guard !AppSettings.defaults.bool(forKey: SettingsKey.didSeedRecipes),
+              !suggestions.isEmpty else { return }
+        for suggestion in suggestions {
+            recipeStore.add(name: suggestion, prompt: suggestion)
+        }
+        AppSettings.defaults.set(true, forKey: SettingsKey.didSeedRecipes)
+    }
+
+    private func saveCurrentInputAsRecipe() {
+        let text = input.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return }
+        let name = String(text.prefix(40))
+        recipeStore.add(name: name, prompt: text)
+        didSaveRecipe = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { didSaveRecipe = false }
     }
 }
 

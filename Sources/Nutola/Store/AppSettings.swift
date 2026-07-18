@@ -30,6 +30,8 @@ enum SettingsKey {
     static let transcriptionModel = "transcriptionModel" // apple | parakeetStreaming | parakeetBatch | nemotron
     static let developerMode = "developerMode"                 // show Debug settings tab
     static let crashDiagnostics = "crashDiagnostics"           // write a scrubbed diagnostic on crash (opt-in)
+    static let recipes = "recipes"                     // saved Ask Claude prompt library (RecipeStore)
+    static let didSeedRecipes = "didSeedRecipes"           // one-shot flag: built-in suggestions seeded into RecipeStore
 }
 
 enum AppearanceMode: String, CaseIterable, Identifiable, Hashable {

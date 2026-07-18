@@ -67,6 +67,7 @@ struct MenuBarView: View {
                     }
                 }
                 .padding(.top, 4)
+                .padding(.bottom, 4)
             } else {
                 HStack {
                     Button("Open Nutola") { openMain() }

@@ -227,9 +227,11 @@ struct MenuBarView: View {
                 .foregroundStyle(Theme.heading(scheme))
             Spacer()
             Button {
-                dismissMenu()
                 openSettings()
                 NSApp.activate()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    dismissMenu()
+                }
             } label: {
                 Image(systemName: "gearshape")
                     .font(.nutola(14, .medium))
@@ -318,9 +320,11 @@ struct MenuBarView: View {
     }
 
     private func openMain() {
-        dismissMenu()
         openWindow(id: "main")
         NSApp.activate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            dismissMenu()
+        }
     }
 }
 

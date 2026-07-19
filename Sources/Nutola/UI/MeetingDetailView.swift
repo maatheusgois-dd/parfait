@@ -187,6 +187,15 @@ struct MeetingDetailView: View {
             .buttonStyle(.plain)
             .help("Copy transcript")
             .disabled(app.store.transcript(for: meeting.id).isEmpty)
+            Button {
+                showShareNotes = true
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.secondary(scheme))
+            }
+            .buttonStyle(.plain)
+            .help("Share notes")
             publishMenu
         }
         .padding(.horizontal, 20)
@@ -879,18 +888,8 @@ struct MeetingDetailView: View {
 
     private var publishMenu: some View {
         Menu {
-            if GitHubGist.isAvailable {
-                Button("Publish to secret Gist") { publish() }
-            } else {
-                Button("Publish to secret Gist (needs gh)") {}
-                    .disabled(true)
-            }
             Button("Copy notes") { copyNotes() }
             Button("Preview in browser") { previewInBrowser() }
-            if let existing = meeting.publishedURL, let url = URL(string: existing) {
-                Divider()
-                Link("Open published page", destination: url)
-            }
             Divider()
             Menu("Export…") {
                 Button("HTML…") { exportHTML() }
@@ -900,8 +899,6 @@ struct MeetingDetailView: View {
                 Divider()
                 Button("CSV (all meetings)…") { exportCSVAll() }
                     .disabled(app.store.meetings.isEmpty)
-                Divider()
-                Button("Share Notes…") { showShareNotes = true }
             }
             FolderPickerMenu(
                 currentFolderID: meeting.folderID,

@@ -1,3 +1,10 @@
+/// Voice Commands During Recording — bookmarks dropped while recording.
+///
+/// A `TranscriptMarker` captures a point in a recording the user flagged via
+/// the ⌃⌥B hotkey (or the "Hey Nutola, mark this" voice trigger). Markers are
+/// persisted per meeting in UserDefaults by `TranscriptMarkerStore` and
+/// surface in the transcript reader as `bookmark.fill` badges next to the
+/// nearest turn; clicking a badge while viewing scrolls back to that turn.
 import Foundation
 import SwiftUI
 

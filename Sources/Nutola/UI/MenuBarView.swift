@@ -229,7 +229,7 @@ struct MenuBarView: View {
             Button {
                 openSettings()
                 NSApp.activate()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                     dismissMenu()
                 }
             } label: {
@@ -322,18 +322,22 @@ struct MenuBarView: View {
     private func openMain() {
         openWindow(id: "main")
         NSApp.activate()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             dismissMenu()
         }
     }
 }
 
-/// SwiftUI's MenuBarExtra(.window) has no dismiss API — capture the panel and order it out.
+/// SwiftUI's MenuBarExtra(.window) has no dismiss API — capture the panel and
+/// order it out. As a fallback, also try clicking the status bar item to
+/// toggle the panel closed.
 private enum MenuBarExtraPanel {
     private static weak var window: NSWindow?
 
     static func dismiss() {
         window?.orderOut(nil)
+        // Also try close — some MenuBarExtra windows respond to this
+        window?.close()
     }
 
     static func bind(_ window: NSWindow?) {

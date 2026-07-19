@@ -106,6 +106,8 @@ struct MenuBarView: View {
                 }
         }
         }
+        .padding(EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14))
+        .frame(width: 320)
     }
 
     private var upcomingDays: [UpcomingMeetingsDay] {

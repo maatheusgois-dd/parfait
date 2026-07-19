@@ -4,6 +4,7 @@ enum SidebarItem: Hashable {
     case home
     case meetings
     case insights
+    case digest
     case library
     case folder(UUID)
 }
@@ -52,12 +53,12 @@ struct MainWindowView: View {
     private func dismissMeeting() {
         presentedMeetingID = nil
     }
-
     private var meetingBackTitle: String {
         switch selection {
         case .home: "Coming up"
         case .meetings: "Meetings"
         case .insights: "Insights"
+        case .digest: "Daily Digest"
         case .library: "Ask"
         case .folder(let id):
             app.folders.folder(id: id)?.name ?? "Folder"
@@ -85,6 +86,7 @@ struct MainWindowView: View {
             sidebarRow(.meetings, label: "Meetings", icon: "list.bullet.rectangle")
             sidebarRow(.insights, label: "Insights", icon: "chart.bar.xaxis")
             sidebarRow(.library, label: "Ask", icon: "bubble.left.and.text.bubble.right")
+            sidebarRow(.digest, label: "Daily Digest", icon: "list.bullet.clipboard")
         }
     }
 
@@ -149,6 +151,8 @@ struct MainWindowView: View {
                     MeetingsListView()
                 case .insights:
                     MeetingInsightsView()
+                case .digest:
+                    DailyDigestView()
                 case .library:
                     LibraryLauncherView()
                 case .folder(let id):

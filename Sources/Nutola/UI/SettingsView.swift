@@ -955,6 +955,10 @@ private struct TemplateSettings: View {
     @State private var draftName = ""
     @State private var draftBody = ""
     @State private var saveError: String?
+    @State private var deleteError: String?
+    @State private var showAISheet = false
+    @State private var aiPrompt = ""
+    @State private var isGenerating = false
 
     var body: some View {
         HSplitView {
@@ -973,14 +977,30 @@ private struct TemplateSettings: View {
                             name: name,
                             body: "# {{title}}\n\n## Highlights\nWhat mattered most.\n"))
                         reload(select: name)
-                    } label: { Image(systemName: "plus") }
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .help("New template")
                     Button {
-                        if let selected {
-                            try? app.templates.delete(named: selected)
+                        guard let selected else { return }
+                        do {
+                            try app.templates.delete(named: selected)
                             reload(select: nil)
+                            deleteError = nil
+                        } catch {
+                            deleteError = error.localizedDescription
                         }
-                    } label: { Image(systemName: "minus") }
-                        .disabled(selected == nil)
+                    } label: {
+                        Image(systemName: "minus")
+                    }
+                    .disabled(selected == nil)
+                    .help("Delete template")
+                    Button {
+                        showAISheet = true
+                    } label: {
+                        Image(systemName: "sparkles")
+                    }
+                    .help("Generate template with AI")
                     Spacer()
                 }
                 .buttonStyle(.plain)
@@ -1024,6 +1044,78 @@ private struct TemplateSettings: View {
         }
         .onAppear { reload(select: selected ?? templates.first?.name) }
         .onChange(of: selected) { loadDraft() }
+        .sheet(isPresented: $showAISheet) {
+            aiTemplateSheet
+        }
+    }
+
+    private var aiTemplateSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Generate Template with AI")
+                    .font(.nutola(15, .bold))
+                Spacer()
+                Button("Cancel") { showAISheet = false }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+            Text("Describe what kind of meeting template you need:")
+                .font(.nutola(12))
+                .foregroundStyle(.secondary)
+            TextEditor(text: $aiPrompt)
+                .font(.system(size: 12))
+                .scrollContentBackground(.hidden)
+                .frame(height: 80)
+                .padding(8)
+                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+            Text("Available placeholders: {{title}} {{date}} {{attendees}} {{duration}} {{app}}")
+                .font(.nutola(10))
+                .foregroundStyle(.secondary)
+            HStack {
+                if let deleteError {
+                    Label(deleteError, systemImage: "exclamationmark.triangle")
+                        .font(.nutola(11))
+                        .foregroundStyle(.orange)
+                }
+                Spacer()
+                Button(isGenerating ? "Generating…" : "Generate") {
+                    generateTemplate()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(actionColor)
+                .disabled(isGenerating || aiPrompt.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+    }
+
+    private func generateTemplate() {
+        isGenerating = true
+        let prompt = """
+        Create a meeting notes template in Markdown. \(aiPrompt)
+        Use these placeholders: {{title}} {{date}} {{attendees}} {{duration}} {{app}}.
+        Use ## headings to guide the AI summarizer — text under a heading tells it what belongs there.
+        Return ONLY the markdown template, no explanation.
+        """
+        Task {
+            do {
+                let result = try await AIAsk.answer(prompt: prompt)
+                let name = "AI: \(String(aiPrompt.prefix(30)).trimmingCharacters(in: .whitespaces))"
+                try app.templates.save(SummaryTemplate(name: name, body: result))
+                await MainActor.run {
+                    isGenerating = false
+                    showAISheet = false
+                    aiPrompt = ""
+                    reload(select: name)
+                }
+            } catch {
+                await MainActor.run {
+                    isGenerating = false
+                    deleteError = error.localizedDescription
+                }
+            }
+        }
     }
 
     private func reload(select: String?) {

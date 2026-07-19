@@ -53,6 +53,7 @@ struct MeetingInsightsView: View {
                     cards
                     chart
                     talkTimeSection
+                    costSection
                 }
             }
             .padding(24)
@@ -180,6 +181,48 @@ struct MeetingInsightsView: View {
     private var talkTimeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             TalkTimeDashboardView(meetings: weekMeetings)
+        }
+        .padding(16)
+        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.cornerRadius))
+    }
+
+    // MARK: - Meeting cost
+
+    private var costSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "dollarsign.circle.fill")
+                    .font(.nutola(13, .medium))
+                    .foregroundStyle(Theme.honey(scheme))
+                Text("Estimated meeting cost")
+                    .font(.nutola(14, .semibold))
+                    .foregroundStyle(Theme.heading(scheme))
+                Spacer()
+            }
+            let totalCost = weekMeetings.reduce(0.0) { sum, meeting in
+                let attendees = max(meeting.attendees.count, 1)
+                let minutes = Int(meeting.duration / 60)
+                return sum + MeetingCostCalculator.calculate(
+                    attendeeCount: attendees,
+                    durationMinutes: minutes,
+                    hourlyRatePerPerson: AppSettings.hourlyRatePerPerson
+                ).totalCost
+            }
+            InsightCard(
+                title: "This week",
+                value: MeetingCost.format(totalCost),
+                icon: "calendar.badge.clock",
+                accent: Theme.honey(scheme))
+            let perMeeting = insights.meetingCount > 0
+                ? totalCost / Double(insights.meetingCount) : 0
+            InsightCard(
+                title: "Per meeting avg",
+                value: MeetingCost.format(perMeeting),
+                icon: "divide.circle",
+                accent: Theme.blueberry(scheme))
+            Text("Based on \(AppSettings.hourlyRatePerPerson, format: .currency(code: "USD")) per person per hour. Change in Settings.")
+                .font(.nutola(10))
+                .foregroundStyle(Theme.tertiary(scheme))
         }
         .padding(16)
         .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: Theme.cornerRadius))

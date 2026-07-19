@@ -983,69 +983,107 @@ struct MeetingDetailView: View {
     /// to the pasteboard, save it to disk via NSSavePanel, or publish a secret
     /// gist and reveal the rendered notes.nutola.to URL.
     private var shareNotesSheet: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Share Notes")
-                .font(.nutola(15, .semibold))
-                .foregroundStyle(Theme.heading(scheme))
-            Text("A read-only page with the summary, action items, and transcript.")
-                .font(.nutola(12))
-                .foregroundStyle(Theme.secondary(scheme))
-
-            HStack(spacing: 10) {
-                Button {
-                    copyShareNotesHTML()
-                } label: {
-                    Label("Copy HTML", systemImage: "doc.on.doc")
-                        .frame(maxWidth: .infinity)
+        VStack(alignment: .leading, spacing: 20) {
+            // Header
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.nutola(16, .medium))
+                        .foregroundStyle(actionColor)
+                    Text("Share Notes")
+                        .font(.nutola(18, .bold))
+                        .foregroundStyle(Theme.heading(scheme))
                 }
-                .buttonStyle(.bordered)
+                Text("A read-only page with the summary, action items, and transcript.")
+                    .font(.nutola(12))
+                    .foregroundStyle(Theme.secondary(scheme))
+            }
 
-                Button {
-                    saveShareNotesHTML()
-                } label: {
-                    Label("Save HTML", systemImage: "square.and.arrow.down")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+            // Action buttons as cards
+            VStack(spacing: 10) {
+                shareActionCard(
+                    icon: "doc.on.doc",
+                    title: "Copy HTML",
+                    subtitle: "Copy to clipboard",
+                    isPrimary: false
+                ) { copyShareNotesHTML() }
+
+                shareActionCard(
+                    icon: "square.and.arrow.down",
+                    title: "Save HTML",
+                    subtitle: "Save as a file",
+                    isPrimary: false
+                ) { saveShareNotesHTML() }
 
                 if GitHubGist.isAvailable {
-                    Button {
-                        publishShareNotes()
-                    } label: {
-                        if shareNotesState == .working {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Label("Publish to Gist", systemImage: "safari")
-                        }
+                    shareActionCard(
+                        icon: "safari",
+                        title: shareNotesState == .working ? "Publishing…" : "Publish to Gist",
+                        subtitle: "Share via a public link",
+                        isPrimary: true
+                    ) {
+                        if shareNotesState != .working { publishShareNotes() }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(actionColor)
-                    .disabled(shareNotesState == .working)
                 } else {
-                    Button("Publish to Gist (needs gh)") {}
-                        .disabled(true)
+                    HStack(spacing: 12) {
+                        Image(systemName: "safari")
+                            .font(.nutola(18, .medium))
+                            .foregroundStyle(Theme.tertiary(scheme))
+                            .frame(width: 36)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Publish to Gist")
+                                .font(.nutola(13, .semibold))
+                            Text("Requires GitHub CLI (gh) to be installed")
+                                .font(.nutola(10))
+                                .foregroundStyle(Theme.tertiary(scheme))
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .background(Theme.card(scheme).opacity(0.5),
+                               in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
             }
 
+            // Status
             switch shareNotesState {
-            case .idle:
-                EmptyView()
-            case .working:
-                Text("Publishing…")
-                    .font(.nutola(11))
-                    .foregroundStyle(Theme.secondary(scheme))
-            case .done(let url):
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Published. The link is on your clipboard.")
-                        .font(.nutola(11))
-                        .foregroundStyle(Theme.mint(scheme))
-                    Link(url.absoluteString, destination: url)
-                        .font(.nutola(11))
+            case .idle, .working:
+                if shareNotesState == .working {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Publishing…")
+                            .font(.nutola(11))
+                            .foregroundStyle(Theme.secondary(scheme))
+                    }
                 }
+            case .done(let url):
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Theme.mint(scheme))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Published! Link copied to clipboard.")
+                            .font(.nutola(11, .medium))
+                            .foregroundStyle(Theme.mint(scheme))
+                        Link(url.absoluteString, destination: url)
+                            .font(.nutola(11))
+                            .foregroundStyle(Theme.blueberry(scheme))
+                    }
+                    Spacer()
+                }
+                .padding(10)
+                .background(Theme.mint(scheme).opacity(0.08),
+                           in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             case .failed(let message):
-                Text(message)
-                    .font(.nutola(11))
-                    .foregroundStyle(.red)
+                HStack(spacing: 6) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                    Text(message)
+                        .font(.nutola(11))
+                        .foregroundStyle(.red)
+                }
+                .padding(10)
+                .background(Color.red.opacity(0.08),
+                           in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
 
             Spacer()
@@ -1053,11 +1091,57 @@ struct MeetingDetailView: View {
                 Spacer()
                 Button("Done") { showShareNotes = false }
                     .buttonStyle(.bordered)
+                    .controlSize(.regular)
             }
         }
-        .padding(20)
-        .frame(width: 420, height: 280)
+        .padding(24)
+        .frame(width: 440, height: 460)
         .onDisappear { shareNotesState = .idle }
+    }
+
+    private func shareActionCard(
+        icon: String,
+        title: String,
+        subtitle: String,
+        isPrimary: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.nutola(18, .medium))
+                    .foregroundStyle(isPrimary ? .white : actionColor)
+                    .frame(width: 36, height: 36)
+                    .background(
+                        isPrimary ? actionColor.opacity(0.15) : actionColor.opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.nutola(13, .semibold))
+                        .foregroundStyle(Theme.heading(scheme))
+                    Text(subtitle)
+                        .font(.nutola(10))
+                        .foregroundStyle(Theme.tertiary(scheme))
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.nutola(10, .medium))
+                    .foregroundStyle(Theme.tertiary(scheme))
+            }
+            .padding(12)
+            .background(
+                isPrimary
+                    ? Theme.card(scheme)
+                    : Theme.card(scheme).opacity(0.7),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(isPrimary ? actionColor.opacity(0.2) : .clear, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private func sharedNotesInputs() -> (Meeting, String, [TranscriptTurn], [ActionItem]) {

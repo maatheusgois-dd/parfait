@@ -86,6 +86,99 @@ final class DailyDigestGenerator {
         )
     }
 
+    /// Build a digest for today so far: collect meetings whose `createdAt`
+    /// falls in today's calendar day up to `date`, gather action items, and
+    /// produce a text briefing. Useful for mid-day check-ins.
+    func generateToday(
+        for date: Date,
+        meetings: [Meeting],
+        agenda: [CalendarEventSummary],
+        summaries: [UUID: String] = [:]
+    ) -> DailyDigest {
+        let todayStart = calendar.startOfDay(for: date)
+        let todayMeetings = meetings
+            .filter { $0.createdAt >= todayStart && $0.createdAt < date }
+            .sorted { $0.createdAt < $1.createdAt }
+
+        var perMeetingItems: [[ActionItem]] = []
+        var flatItems: [ActionItem] = []
+        for meeting in todayMeetings {
+            let summary = summaries[meeting.id] ?? ""
+            let items = ActionItemParser.openItems(summary)
+            perMeetingItems.append(items)
+            flatItems.append(contentsOf: items)
+        }
+
+        let summary = renderTodayDigest(
+            date: date,
+            todayMeetings: todayMeetings,
+            perMeetingItems: perMeetingItems,
+            agenda: agenda,
+            flatActionItems: flatItems
+        )
+
+        return DailyDigest(
+            date: date,
+            yesterdayMeetings: todayMeetings,
+            todayAgenda: agenda,
+            summary: summary,
+            actionItems: flatItems
+        )
+    }
+
+    private func renderTodayDigest(
+        date: Date,
+        todayMeetings: [Meeting],
+        perMeetingItems: [[ActionItem]],
+        agenda: [CalendarEventSummary],
+        flatActionItems: [ActionItem]
+    ) -> String {
+        var lines: [String] = []
+
+        if todayMeetings.isEmpty {
+            lines.append("📋 Today's Digest")
+            lines.append("")
+            lines.append("No meetings recorded today yet")
+        } else {
+            lines.append("📋 Today's Digest (\(todayMeetings.count) meetings so far)")
+            lines.append("")
+            for (index, meeting) in todayMeetings.enumerated() {
+                let count = index < perMeetingItems.count ? perMeetingItems[index].count : 0
+                lines.append("Meeting \(index + 1): \(meeting.title) — \(count) action items")
+            }
+        }
+
+        if !flatActionItems.isEmpty {
+            lines.append("")
+            lines.append("📌 Action Items:")
+            var itemIndex = 0
+            for (meetingIndex, items) in perMeetingItems.enumerated() {
+                for _ in items {
+                    let item = flatActionItems[itemIndex]
+                    let owner = item.owner.map { " (\($0))" } ?? ""
+                    lines.append("- [ ] \(item.text)\(owner) (from Meeting \(meetingIndex + 1))")
+                    itemIndex += 1
+                }
+            }
+        }
+
+        // Upcoming events (agenda items after current time)
+        let upcoming = agenda.filter { $0.start >= date }.sorted { $0.start < $1.start }
+        if !upcoming.isEmpty {
+            lines.append("")
+            lines.append("📅 Upcoming Today:")
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = calendar.timeZone
+            formatter.dateFormat = "HH:mm"
+            for event in upcoming {
+                lines.append("- \(formatter.string(from: event.start)) \(event.title)")
+            }
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
     /// Format an existing digest as a morning briefing. Renders the stored
     /// summary text (already formatted at generation time); reformats from
     /// fields when the stored summary is empty.

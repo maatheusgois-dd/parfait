@@ -45,6 +45,11 @@ final class AppState: NSObject, ObservableObject {
     /// logic. Set to nil to clear the banner.
     @Published var lastError: String?
     @Published var openMeetingID: UUID?
+    /// Toggled by MenuBarView to request the MenuBarExtra panel to dismiss
+    /// itself. NutolaApp binds isInserted directly to this; setting it to
+    /// false removes the menu bar item (closing the popover), then a async
+    /// dispatch re-enables it.
+    @Published var menuBarInserted = true
     @Published private(set) var activeMicApps: [pid_t: String] = [:]
     @Published private(set) var notificationAuthStatus: UNAuthorizationStatus = .notDetermined
     var activeMicAppNames: [String] { Array(Set(activeMicApps.values)).sorted() }

@@ -11,7 +11,7 @@ struct NutolaApp: App {
     private let openMainAtLaunch = AppSettings.didCompleteOnboarding && AppSettings.openMainWindowAtLaunch
 
     var body: some Scene {
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $app.menuBarInserted) {
             MenuBarView()
                 .environmentObject(app)
                 .nutolaAppearance()
@@ -23,7 +23,6 @@ struct NutolaApp: App {
                 nextEvent: menuBarNextEvent)
         }
         .menuBarExtraStyle(.window)
-
         Window("Nutola", id: "main") {
             MainWindowView()
                 .environmentObject(app)

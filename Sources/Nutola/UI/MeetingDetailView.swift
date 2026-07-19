@@ -258,7 +258,7 @@ struct MeetingDetailView: View {
                     text: hasSideNotes ? "My notes" : "Write notes",
                     accent: showSideNotes
                         ? Theme.mint(scheme)
-                        : (isEmptyTranscriptNotice && !hasSideNotes ? Theme.honey(scheme) : nil))
+                        : (isEmptyTranscriptNotice && !hasSideNotes ? Theme.honey(scheme) : actionColor))
             }
             .buttonStyle(.plain)
             .help(hasSideNotes ? "Show or hide your notes" : "Open notes to write what happened")

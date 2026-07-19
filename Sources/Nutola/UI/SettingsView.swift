@@ -994,12 +994,18 @@ private struct TemplateSettings: View {
                     }
                     .help("New template")
                     Button {
-                        guard let selected else { return }
+                        guard let selected else {
+                            NutolaConsoleLog.app("[TemplateSettings] delete: no selection")
+                            return
+                        }
+                        NutolaConsoleLog.app("[TemplateSettings] delete: \(selected)")
                         do {
                             try app.templates.delete(named: selected)
+                            NutolaConsoleLog.app("[TemplateSettings] delete succeeded, reloading")
                             reload(select: nil)
                             deleteError = nil
                         } catch {
+                            NutolaConsoleLog.app("[TemplateSettings] delete failed: \(error)")
                             deleteError = error.localizedDescription
                         }
                     } label: {
@@ -1040,6 +1046,15 @@ private struct TemplateSettings: View {
                                 .foregroundStyle(.orange)
                         }
                         Spacer()
+                        Button {
+                            showAISheet = true
+                        } label: {
+                            Label("Generate with AI", systemImage: "sparkles")
+                                .font(.nutola(12, .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(actionColor)
+                        .help("Generate a new template with AI")
                         Button("Save") { save() }
                             .buttonStyle(.borderedProminent)
                             .tint(actionColor)

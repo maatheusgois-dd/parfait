@@ -227,11 +227,9 @@ struct MenuBarView: View {
                 .foregroundStyle(Theme.heading(scheme))
             Spacer()
             Button {
+                dismissMenu()
                 openSettings()
-                NSApp.activate()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    dismissMenu()
-                }
+                NSApp.activate(ignoringOtherApps: true)
             } label: {
                 Image(systemName: "gearshape")
                     .font(.nutola(14, .medium))
@@ -316,15 +314,16 @@ struct MenuBarView: View {
     }
 
     private func dismissMenu() {
-        MenuBarExtraPanel.dismiss()
+        app.menuBarInserted = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            app.menuBarInserted = true
+        }
     }
 
     private func openMain() {
+        dismissMenu()
         openWindow(id: "main")
-        NSApp.activate()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            dismissMenu()
-        }
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 

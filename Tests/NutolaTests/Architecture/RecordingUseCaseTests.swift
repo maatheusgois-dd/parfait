@@ -71,7 +71,9 @@ final class RecordingUseCaseTests: XCTestCase {
             meetingRepository: meetings,
             folderRepository: MeetingFolderStore(),
             calendarRepository: MockCalendarRepository(),
-            settings: MockSettingsRepository())
+            settings: MockSettingsRepository(),
+            templateOverrides: TemplateOverrideStore(),
+            availableTemplateNames: { [] })
 
         let result = await start.execute(sourceApp: "Zoom", calendarEvent: nil)
 

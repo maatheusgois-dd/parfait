@@ -7,6 +7,7 @@ struct MeetingsListView: View {
 
     @State private var searchQuery = ""
     @FocusState private var searchFocused: Bool
+    @State private var meetingToDelete: Meeting?
 
     private var groups: [MeetingDayGroup] {
         MeetingDayGrouper.group(meetings: app.store.meetings)
@@ -65,6 +66,13 @@ struct MeetingsListView: View {
                                             ) {
                                                 Label("Move to Folder", systemImage: "folder")
                                             }
+                                            Divider()
+                                            Button(role: .destructive) {
+                                                meetingToDelete = meeting
+                                            } label: {
+                                                Label("Delete", systemImage: "trash")
+                                            }
+                                            .disabled(app.recordingMeeting?.id == meeting.id)
                                         }
                                         if meeting.id != group.meetings.last?.id {
                                             Divider().padding(.leading, 8)
@@ -86,6 +94,26 @@ struct MeetingsListView: View {
             Button("Search") { searchFocused = true }
                 .keyboardShortcut("f", modifiers: .command)
                 .hidden()
+        }
+        .confirmationDialog(
+            "Delete this meeting?",
+            isPresented: Binding(
+                get: { meetingToDelete != nil },
+                set: { if !$0 { meetingToDelete = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete meeting, transcript, and notes", role: .destructive) {
+                guard let meetingToDelete else { return }
+                app.store.delete(id: meetingToDelete.id)
+                self.meetingToDelete = nil
+            }
+            Button("Cancel", role: .cancel) {
+                self.meetingToDelete = nil
+            }
+        } message: {
+            if let meetingToDelete {
+                Text("“\(meetingToDelete.calendarEventTitle ?? meetingToDelete.title)” and its transcript, notes, and audio files will be permanently deleted. This cannot be undone.")
+            }
         }
     }
 

@@ -35,6 +35,9 @@ enum SettingsKey {
     static let didSeedRecipes = "didSeedRecipes"           // one-shot flag: built-in suggestions seeded into RecipeStore
     static let archivedEventTitles = "archivedEventTitles"   // calendar events hidden by title (series)
     static let archivedEventIDs = "archivedEventIDs"         // individual calendar events hidden by ID
+    static let hourlyRatePerPerson = "hourlyRatePerPerson" // estimated $/hr per attendee for the meeting-cost badge
+    static let showMeetingCost = "showMeetingCost"           // display the 💰 cost badge in the meeting header
+    static let smartTemplatesEnabled = "smartTemplatesEnabled" // auto-pick summary template by meeting type
 }
 
 enum AppearanceMode: String, CaseIterable, Identifiable, Hashable {
@@ -139,6 +142,9 @@ enum AppSettings {
             SettingsKey.sideNotesPanelWidth: 280.0,
             SettingsKey.developerMode: false,
             SettingsKey.crashDiagnostics: false,
+            SettingsKey.hourlyRatePerPerson: 100.0,
+            SettingsKey.showMeetingCost: true,
+            SettingsKey.smartTemplatesEnabled: true,
         ])
     }
 
@@ -218,5 +224,21 @@ enum AppSettings {
     static var transcriptionModel: TranscriptionModel {
         TranscriptionModel(rawValue: defaults.string(forKey: SettingsKey.transcriptionModel) ?? "")
             ?? .apple
+    }
+    /// Estimated per-attendee hourly rate ($/hr) used by the meeting-cost badge.
+    /// Defaults to 100.0; falls back to that when unset or non-positive.
+    static var hourlyRatePerPerson: Double {
+        let value = defaults.double(forKey: SettingsKey.hourlyRatePerPerson)
+        return value > 0 ? value : 100.0
+    }
+    /// Whether the 💰 cost badge appears in the meeting header. Defaults to true.
+    static var showMeetingCost: Bool {
+        defaults.bool(forKey: SettingsKey.showMeetingCost)
+    }
+    /// Whether Nutola auto-selects a summary template based on detected meeting
+    /// type (standup, interview, 1:1, …). When off, the user's default template
+    /// is used for every meeting and no type badge is shown. Defaults to true.
+    static var smartTemplatesEnabled: Bool {
+        defaults.bool(forKey: SettingsKey.smartTemplatesEnabled)
     }
 }

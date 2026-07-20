@@ -51,6 +51,15 @@ struct Meeting: Codable, Identifiable, Equatable, Sendable {
     var folderID: UUID?
     /// Transcript remote speakers were labeled from Zoom active-speaker events.
     var platformSpeakerAttribution: Bool = false
+
+    /// The time to show in the UI for this meeting. Prefer the matched
+    /// calendar event's start so a resumed or late-started meeting shows
+    /// its scheduled time and lands on the right day in the list, not the
+    /// recording-start timestamp. Falls back to `createdAt` for manual
+    /// recordings with no calendar link.
+    var displayTime: Date {
+        calendarEventStart ?? createdAt
+    }
 }
 
 struct MeetingFolder: Codable, Identifiable, Equatable, Sendable {

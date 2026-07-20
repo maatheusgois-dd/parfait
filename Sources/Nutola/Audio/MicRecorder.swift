@@ -263,8 +263,12 @@ final class MicRecorder: @unchecked Sendable {
     /// When we temporarily switch HAL default input for a built-in fallback.
     private var savedDefaultInputDevice: AudioObjectID?
     private var activeInputDeviceName: String?
+    /// True while the built-in mic fallback is active. Suppresses the
+    /// default-input listener so Chrome/Meet resetting the default to the BT
+    /// headset doesn't kill our engine.
+    private var usingBuiltInFallback = false
 
-    func start(writingTo url: URL) throws {
+    func start(writingTo url: URL, sourceApp: String? = nil) throws {
         lock.lock()
         defer { lock.unlock() }
         guard engine == nil else { throw MicRecorderError.alreadyRecording }
@@ -277,15 +281,24 @@ final class MicRecorder: @unchecked Sendable {
         do {
             try startEngineLocked(writingTo: url)
         } catch {
-            guard Self.defaultInputIsBluetooth, let builtIn = Self.builtInInputDevice(),
+            // Bluetooth headset mic is contended (Chrome/Meet/Zoom hold it), so
+            // AVAudioEngine fails with "input unavailable". Fall back to the
+            // built-in mic by switching the system default input. Zoom keeps the
+            // headset mic; Chrome/Meet fight back — they reset the default to the
+            // BT headset, which would kill our engine. We suppress the
+            // default-input listener while the fallback is active so those
+            // resets don't trigger a losing restart loop.
+            guard Self.defaultInputIsBluetooth,
+                  let builtIn = Self.builtInInputDevice(),
                   let previous = Self.defaultInputDeviceID
             else { throw error }
             let builtInName = Self.deviceName(builtIn) ?? "built-in"
             NutolaConsoleLog.recording(
-                "mic BT engine failed — retrying with [\(builtInName)] (Zoom keeps the headset mic)")
+                "mic BT engine failed — retrying with [\(builtInName)] (source=\(sourceApp ?? "manual"))")
             teardownLocked()
             try Self.setDefaultInputDevice(builtIn)
             savedDefaultInputDevice = previous
+            usingBuiltInFallback = true
             do {
                 try startEngineLocked(writingTo: url)
                 activeInputDeviceName = builtInName
@@ -293,6 +306,7 @@ final class MicRecorder: @unchecked Sendable {
             } catch let fallbackError {
                 Self.restoreDefaultInputDevice(previous)
                 savedDefaultInputDevice = nil
+                usingBuiltInFallback = false
                 throw fallbackError
             }
         }
@@ -342,6 +356,16 @@ final class MicRecorder: @unchecked Sendable {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain)
         let inputListener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            // While the built-in fallback is active, the system default input is
+            // intentionally set to the built-in mic. Chrome/Meet may reset it back
+            // to the Bluetooth headset — ignore that; restarting would bind to the
+            // contended BT mic and die again. Only restart when we're tracking the
+            // default device (no fallback active).
+            let suppressed = self?.lock.withLock { self?.usingBuiltInFallback ?? false } ?? false
+            if suppressed {
+                NutolaConsoleLog.recording("mic default input changed — ignored (built-in fallback active)")
+                return
+            }
             NutolaConsoleLog.recording("mic default input device changed — restarting")
             self?.restartQueue.async { self?.restartAfterConfigurationChange() }
         }
@@ -403,6 +427,7 @@ final class MicRecorder: @unchecked Sendable {
         if let saved {
             Self.restoreDefaultInputDevice(saved)
             savedDefaultInputDevice = nil
+            usingBuiltInFallback = false
             NutolaConsoleLog.recording("mic restored default input device")
         }
     }
@@ -445,20 +470,97 @@ final class MicRecorder: @unchecked Sendable {
     }
 
     /// Default input device switched: the engine stops itself and the old tap format is stale.
+    /// Rebuild a fresh AVAudioEngine bound to the current default input, keeping the
+    /// same open file so the recording stays continuous. If the new engine fails to
+    /// start (BT mic contended by Zoom/Chrome), fall back to the built-in mic.
     private func restartAfterConfigurationChange() {
         lock.lock()
         defer { lock.unlock() }
-        guard let engine, file != nil else { return }
-        engine.inputNode.removeTap(onBus: 0)
+        guard file != nil else { return }
+        // Snapshot the file before teardown so the new engine writes to the same one.
+        // AVAudioFile can't be reopened for append on the same path, so we keep the
+        // existing file object and only tear down the engine/tap.
+        let existingFile = self.file
+        // Tear down only the engine + tap, NOT the file.
+        if let engine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            self.engine = nil
+        }
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+            self.configObserver = nil
+        }
+        // Build a fresh engine bound to the current default input.
+        let fresh = AVAudioEngine()
+        let inputFormat = fresh.inputNode.outputFormat(forBus: 0)
+        let inputName = Self.defaultInputDeviceName ?? "unknown"
+        NutolaConsoleLog.recording(
+            "mic restart — fresh engine device=[\(inputName)] sr=\(inputFormat.sampleRate) ch=\(inputFormat.channelCount)")
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+            NutolaConsoleLog.recording("mic restart — input unavailable (zero format)")
+            let handler = _onRestartFailure
+            DispatchQueue.main.async { handler?(MicRecorderError.inputUnavailable) }
+            return
+        }
+        // Reuse the existing file if its format matches; otherwise we lose the
+ // existing content (AVAudioFile can't append). Keep the file and hope the
+        // format is close enough — the converter handles sample-rate bridging.
+        self.engine = fresh
+        if let existingFile { self.file = existingFile }
         do {
-            try installTapLocked(on: engine)
-            engine.prepare()
-            try engine.start()
+            try installTapLocked(on: fresh)
+            configObserver = NotificationCenter.default.addObserver(
+                forName: .AVAudioEngineConfigurationChange,
+                object: fresh,
+                queue: nil
+            ) { [weak self] _ in
+                self?.restartQueue.async { self?.restartAfterConfigurationChange() }
+            }
+            fresh.prepare()
+            try fresh.start()
+            usingBuiltInFallback = false
+            NutolaConsoleLog.recording("mic restart OK device=[\(inputName)]")
         } catch {
-            NutolaConsoleLog.recording("mic restart after config change failed — \(error.localizedDescription)")
-            // Surface to the owning RecordingSession so the user can be told the mic
-            // went silent, instead of the failure being log-only. Snapshot the handler
-            // under the lock; the next configuration change still retries.
+            NutolaConsoleLog.recording("mic restart failed — \(error.localizedDescription)")
+            // Built-in mic fallback: switch the system default input to the
+            // built-in mic and retry with another fresh engine. This recovers
+            // capture when the BT headset mic is contended (Zoom/Chrome).
+            if !usingBuiltInFallback, Self.defaultInputIsBluetooth,
+               let builtIn = Self.builtInInputDevice(),
+               let previous = Self.defaultInputDeviceID {
+                let builtInName = Self.deviceName(builtIn) ?? "built-in"
+                NutolaConsoleLog.recording(
+                    "mic restart — falling back to built-in [\(builtInName)]")
+                // Tear down the failed engine.
+                fresh.stop(); self.engine = nil
+                try? Self.setDefaultInputDevice(builtIn)
+                savedDefaultInputDevice = previous
+                usingBuiltInFallback = true
+                let retry = AVAudioEngine()
+                self.engine = retry
+                do {
+                    try installTapLocked(on: retry)
+                    configObserver = NotificationCenter.default.addObserver(
+                        forName: .AVAudioEngineConfigurationChange,
+                        object: retry,
+                        queue: nil
+                    ) { [weak self] _ in
+                        self?.restartQueue.async { self?.restartAfterConfigurationChange() }
+                    }
+                    retry.prepare()
+                    try retry.start()
+                    activeInputDeviceName = builtInName
+                    NutolaConsoleLog.recording("mic restarted on built-in fallback [\(builtInName)]")
+                    return
+                } catch let fallbackError {
+                    NutolaConsoleLog.recording(
+                        "mic built-in fallback on restart failed — \(fallbackError.localizedDescription)")
+                    Self.restoreDefaultInputDevice(previous)
+                    savedDefaultInputDevice = nil
+                    usingBuiltInFallback = false
+                }
+            }
             let handler = _onRestartFailure
             DispatchQueue.main.async { handler?(error) }
         }

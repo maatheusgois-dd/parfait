@@ -19,7 +19,9 @@ final class DetectionCoordinatorTests: XCTestCase {
             meetingRepository: meetings,
             folderRepository: MeetingFolderStore(),
             calendarRepository: MockCalendarRepository(),
-            settings: settings)
+            settings: settings,
+            templateOverrides: TemplateOverrideStore(),
+            availableTemplateNames: { [] })
         let stop = StopRecordingUseCase(
             recordingService: recording,
             meetingRepository: meetings,
@@ -105,7 +107,9 @@ final class DetectionCoordinatorTests: XCTestCase {
             meetingRepository: meetings,
             folderRepository: MeetingFolderStore(),
             calendarRepository: MockCalendarRepository(),
-            settings: settings)
+            settings: settings,
+            templateOverrides: TemplateOverrideStore(),
+            availableTemplateNames: { [] })
         let stop = StopRecordingUseCase(
             recordingService: recording,
             meetingRepository: meetings,

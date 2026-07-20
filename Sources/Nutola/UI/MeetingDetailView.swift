@@ -17,6 +17,9 @@ struct MeetingDetailView: View {
     @State private var sideNotes = ""
     @State private var showSideNotes = false
     @State private var sideNotesSaveTask: Task<Void, Never>?
+    @State private var decisionsExpanded = true
+    @State private var showShareNotes = false
+    @State private var shareNotesState: ShareNotesState = .idle
     @AppStorage(SettingsKey.sideNotesPanelWidth) private var sideNotesWidth = 280.0
 
     var backTitle: String?
@@ -25,6 +28,12 @@ struct MeetingDetailView: View {
     enum PublishState: Equatable {
         case idle, working
         case done(URL)
+        case failed(String)
+    }
+
+    enum ShareNotesState: Equatable {
+        case idle, working
+        case done
         case failed(String)
     }
 
@@ -112,6 +121,9 @@ struct MeetingDetailView: View {
         } message: {
             Text("This permanently removes the audio, transcript, and notes from your Mac.")
         }
+        .sheet(isPresented: $showShareNotes) {
+            shareNotesSheet
+        }
     }
 
     private var isRecordingThisMeeting: Bool {
@@ -175,6 +187,15 @@ struct MeetingDetailView: View {
             .buttonStyle(.plain)
             .help("Copy transcript")
             .disabled(app.store.transcript(for: meeting.id).isEmpty)
+            Button {
+                showShareNotes = true
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.secondary(scheme))
+            }
+            .buttonStyle(.plain)
+            .help("Share notes")
             publishMenu
         }
         .padding(.horizontal, 20)
@@ -195,8 +216,8 @@ struct MeetingDetailView: View {
             ScrollView {
                 VStack(spacing: 20) {
                     documentHeader
-                    noticeBanner
                     notesSection
+                    decisionsSection
                     transcriptSection
                 }
                 .contentColumn()
@@ -237,7 +258,7 @@ struct MeetingDetailView: View {
                     text: hasSideNotes ? "My notes" : "Write notes",
                     accent: showSideNotes
                         ? Theme.mint(scheme)
-                        : (isEmptyTranscriptNotice && !hasSideNotes ? Theme.honey(scheme) : nil))
+                        : (isEmptyTranscriptNotice && !hasSideNotes ? Theme.honey(scheme) : actionColor))
             }
             .buttonStyle(.plain)
             .help(hasSideNotes ? "Show or hide your notes" : "Open notes to write what happened")
@@ -273,6 +294,20 @@ struct MeetingDetailView: View {
                 .popover(isPresented: $showAttendees, arrowEdge: .top) {
                     attendeesPopover
                 }
+            }
+            if let type = detectedMeetingType {
+                GranolaChip(
+                    icon: type.symbolName,
+                    text: type.displayName,
+                    accent: Theme.blueberry(scheme))
+                    .help("Auto-detected meeting type. Template: \(MeetingTemplateResolver.templateName(for: type)).")
+            }
+            if let costChip = meetingCostChip {
+                GranolaChip(
+                    icon: nil,
+                    text: "💰 \(costChip.formattedCost)",
+                    accent: Theme.honey(scheme))
+                .help("Estimated cost: \(costChip.attendeeCount) people × \(costChip.durationMinutes) min × \(MeetingCost.format(AppSettings.hourlyRatePerPerson))/hr")
             }
             folderChipContent
             if let provider = meeting.summaryProvider {
@@ -377,6 +412,66 @@ struct MeetingDetailView: View {
             maxWidth: .infinity,
             maxHeight: shouldCenterEmptyNotes ? .infinity : nil,
             alignment: shouldCenterEmptyNotes ? .center : .leading)
+    }
+
+    // MARK: - Decisions
+
+    /// Explicit decisions extracted from the transcript. Only rendered when the
+    /// meeting is not being recorded live (decisions surface once a transcript is
+    /// finalized) and at least one decision was found.
+    @ViewBuilder
+    private var decisionsSection: some View {
+        if !decisions.isEmpty, !isRecordingThisMeeting {
+            DisclosureGroup(isExpanded: $decisionsExpanded) {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(decisions) { decision in
+                        decisionCard(decision)
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.mint(scheme))
+                    Text("Decisions")
+                        .font(.nutola(12, .semibold))
+                        .foregroundStyle(Theme.secondary(scheme))
+                    Text("\(decisions.count)")
+                        .font(.nutola(11, .semibold))
+                        .foregroundStyle(Theme.tertiary(scheme))
+                }
+            }
+        }
+    }
+
+    private var decisions: [Decision] {
+        DecisionExtractor.extract(
+            from: app.store.transcript(for: meeting.id),
+            speakers: meeting.speakers)
+    }
+
+    private func decisionCard(_ decision: Decision) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(decision.speakerName)
+                    .font(.nutola(11, .semibold))
+                    .foregroundStyle(Theme.secondary(scheme))
+                Spacer(minLength: 0)
+                Text(MeetingArchive.timestamp(decision.timestamp))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(Theme.tertiary(scheme))
+            }
+            Text(decision.quote)
+                .font(.nutola(13))
+                .foregroundStyle(Theme.heading(scheme))
+                .textSelection(.enabled)
+                .lineSpacing(3)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card(scheme), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(decision.speakerName) at \(MeetingArchive.timestamp(decision.timestamp)): \(decision.quote)")
     }
 
     // MARK: - Transcript
@@ -614,6 +709,29 @@ struct MeetingDetailView: View {
     private var attendeeChipLabel: String {
         meeting.attendees.count == 1 ? "1 person" : "\(meeting.attendees.count) people"
     }
+    /// Meeting-type badge for the header. Resolves the type from the calendar
+    /// title + attendees (the transcript isn't available at header time) and
+    /// returns it only when smart templates are on and the type is specific
+    /// enough to be worth showing — `.generic` is suppressed so ordinary
+    /// meetings don't get a noisy "General" chip.
+    private var detectedMeetingType: MeetingType? {
+        guard AppSettings.smartTemplatesEnabled else { return nil }
+        let type = MeetingTemplateResolver.resolve(for: meeting)
+        return type == .generic ? nil : type
+    }
+    /// Estimated-meeting-cost badge for the header. Non-nil only when the user
+    /// has the cost feature on AND the meeting has both attendees and a recorded
+    /// duration — otherwise the badge is suppressed (no attendees ⇒ no cost basis,
+    /// zero duration ⇒ a $0 chip that just adds noise).
+    private var meetingCostChip: MeetingCost? {
+        guard AppSettings.showMeetingCost,
+              !meeting.attendees.isEmpty,
+              meeting.duration > 0 else { return nil }
+        return MeetingCostCalculator.estimate(
+            attendees: meeting.attendees,
+            duration: meeting.duration,
+            hourlyRatePerPerson: AppSettings.hourlyRatePerPerson)
+    }
 
     /// Empty-state block already shows the notice and primary action — skip the banner.
     private var emptyNotesHandlesNotice: Bool {
@@ -770,18 +888,8 @@ struct MeetingDetailView: View {
 
     private var publishMenu: some View {
         Menu {
-            if GitHubGist.isAvailable {
-                Button("Publish to secret Gist") { publish() }
-            } else {
-                Button("Publish to secret Gist (needs gh)") {}
-                    .disabled(true)
-            }
             Button("Copy notes") { copyNotes() }
             Button("Preview in browser") { previewInBrowser() }
-            if let existing = meeting.publishedURL, let url = URL(string: existing) {
-                Divider()
-                Link("Open published page", destination: url)
-            }
             Divider()
             Menu("Export…") {
                 Button("HTML…") { exportHTML() }
@@ -864,6 +972,162 @@ struct MeetingDetailView: View {
                 publishState = .failed(error.localizedDescription)
             }
         }
+    }
+
+    // MARK: - Share Notes
+
+    /// Sheet with three ways to share the read-only notes page: copy the HTML
+    /// to the pasteboard, save it to disk via NSSavePanel, or publish a secret
+    /// gist and reveal the rendered notes.nutola.to URL.
+    private var shareNotesSheet: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            // Header
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.nutola(16, .medium))
+                        .foregroundStyle(actionColor)
+                    Text("Share Notes")
+                        .font(.nutola(18, .bold))
+                        .foregroundStyle(Theme.heading(scheme))
+                }
+                Text("A read-only page with the summary, action items, and transcript.")
+                    .font(.nutola(12))
+                    .foregroundStyle(Theme.secondary(scheme))
+            }
+
+            // Action buttons as cards
+            VStack(spacing: 10) {
+                shareActionCard(
+                    icon: "doc.on.doc",
+                    title: "Copy HTML",
+                    subtitle: "Copy to clipboard",
+                    isPrimary: false
+                ) { copyShareNotesHTML() }
+
+                shareActionCard(
+                    icon: "square.and.arrow.down",
+                    title: "Save HTML",
+                    subtitle: "Save as a file",
+                    isPrimary: false
+                ) { saveShareNotesHTML() }
+
+
+            }
+
+            // Status
+            switch shareNotesState {
+            case .idle, .working:
+                EmptyView()
+            case .done:
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Theme.mint(scheme))
+                    Text("HTML copied to clipboard!")
+                        .font(.nutola(11, .medium))
+                        .foregroundStyle(Theme.mint(scheme))
+                    Spacer()
+                }
+                .padding(10)
+                .background(Theme.mint(scheme).opacity(0.08),
+                           in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            case .failed(let message):
+                HStack(spacing: 6) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                    Text(message)
+                        .font(.nutola(11))
+                        .foregroundStyle(.red)
+                }
+                .padding(10)
+                .background(Color.red.opacity(0.08),
+                           in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+
+            Spacer()
+            HStack {
+                Spacer()
+                Button("Done") { showShareNotes = false }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+            }
+        }
+        .padding(24)
+        .frame(width: 440, height: 360)
+        .onDisappear { shareNotesState = .idle }
+    }
+
+    private func shareActionCard(
+        icon: String,
+        title: String,
+        subtitle: String,
+        isPrimary: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.nutola(18, .medium))
+                    .foregroundStyle(isPrimary ? .white : actionColor)
+                    .frame(width: 36, height: 36)
+                    .background(
+                        isPrimary ? actionColor.opacity(0.15) : actionColor.opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.nutola(13, .semibold))
+                        .foregroundStyle(Theme.heading(scheme))
+                    Text(subtitle)
+                        .font(.nutola(10))
+                        .foregroundStyle(Theme.tertiary(scheme))
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.nutola(10, .medium))
+                    .foregroundStyle(Theme.tertiary(scheme))
+            }
+            .padding(12)
+            .background(
+                isPrimary
+                    ? Theme.card(scheme)
+                    : Theme.card(scheme).opacity(0.7),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(isPrimary ? actionColor.opacity(0.2) : .clear, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func sharedNotesInputs() -> (Meeting, String, [TranscriptTurn], [ActionItem]) {
+        let m = meeting
+        let summary = app.store.summary(for: m.id)
+        let turns = TranscriptTurnBuilder.turns(from: app.store.transcript(for: m.id))
+        let items = ActionItemParser.parse(summary)
+        return (m, summary, turns, items)
+    }
+
+    private func copyShareNotesHTML() {
+        let (m, summary, turns, items) = sharedNotesInputs()
+        let html = SharedNotesExporter.exportHTML(
+            meeting: m, summary: summary, transcript: turns, actionItems: items)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(html, forType: .string)
+        shareNotesState = .done
+    }
+
+    private func saveShareNotesHTML() {
+        let (m, summary, turns, items) = sharedNotesInputs()
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = safeFilename + ".html"
+        panel.allowedContentTypes = [.html]
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        let html = SharedNotesExporter.exportHTML(
+            meeting: m, summary: summary, transcript: turns, actionItems: items)
+        try? html.data(using: .utf8)?.write(to: dest)
     }
 
     private func previewInBrowser() {

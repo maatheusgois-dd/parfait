@@ -468,6 +468,8 @@ struct MeetingHistoryRow: View {
         meeting.calendarEventTitle ?? meeting.title
     }
 
+    /// Time shown in the list — see `Meeting.displayTime`.
+
     var body: some View {
         Button(action: action) {
             HStack(alignment: .center, spacing: 12) {
@@ -499,7 +501,7 @@ struct MeetingHistoryRow: View {
                 Spacer(minLength: 8)
 
                 VStack(alignment: .trailing, spacing: 4) {
-                    Text(meeting.createdAt.formatted(date: .omitted, time: .shortened))
+                    Text(meeting.displayTime.formatted(date: .omitted, time: .shortened))
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
                         .foregroundStyle(Theme.tertiary(scheme))
                     if meeting.state != .ready {

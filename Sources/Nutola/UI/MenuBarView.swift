@@ -18,6 +18,7 @@ struct MenuBarView: View {
     @State private var powerHovering = false
     @StateObject private var archivedStore = ArchivedEventStore()
 
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
@@ -107,11 +108,6 @@ struct MenuBarView: View {
         }
         .padding(EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14))
         .frame(width: 320)
-        .background(MenuBarExtraWindowHook())
-        .task {
-            app.reconcileRecordingState()
-            await app.calendar.refreshAgenda()
-        }
     }
 
     private var upcomingDays: [UpcomingMeetingsDay] {
@@ -233,7 +229,7 @@ struct MenuBarView: View {
             Button {
                 dismissMenu()
                 openSettings()
-                NSApp.activate()
+                NSApp.activate(ignoringOtherApps: true)
             } label: {
                 Image(systemName: "gearshape")
                     .font(.nutola(14, .medium))
@@ -324,16 +320,20 @@ struct MenuBarView: View {
     private func openMain() {
         dismissMenu()
         openWindow(id: "main")
-        NSApp.activate()
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
-/// SwiftUI's MenuBarExtra(.window) has no dismiss API — capture the panel and order it out.
+/// SwiftUI's MenuBarExtra(.window) has no dismiss API — capture the panel and
+/// order it out. As a fallback, also try clicking the status bar item to
+/// toggle the panel closed.
 private enum MenuBarExtraPanel {
     private static weak var window: NSWindow?
 
     static func dismiss() {
         window?.orderOut(nil)
+        // Also try close — some MenuBarExtra windows respond to this
+        window?.close()
     }
 
     static func bind(_ window: NSWindow?) {

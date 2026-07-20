@@ -45,6 +45,13 @@ final class SystemAudioTap: @unchecked Sendable {
 
     private(set) var captureStats = CaptureStats()
 
+    /// Current IO callback count — read by the RecordingSession watchdog to
+    /// detect a stalled tap (callbacks stopped but isRunning still true) and
+    /// trigger a rebuild.
+    var currentCallbackCount: UInt64 {
+        controlQueue.sync { ioQueue.sync { UInt64(captureStats.callbackCount) } }
+    }
+
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var ioProcID: AudioDeviceIOProcID?
@@ -265,6 +272,13 @@ final class SystemAudioTap: @unchecked Sendable {
         AudioObjectRemovePropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject), &address, controlQueue, listener)
         outputDeviceListener = nil
+    }
+
+    /// Rebuild the tap+aggregate against the current default output device.
+    /// Called by the output-device listener and by the RecordingSession
+    /// watchdog when callbacks stall (the tap died but isRunning is still true).
+    func rebuildCapture() {
+        rebuildForNewOutputDevice()
     }
 
     /// The tap format is frozen at creation, so a new default output device means the

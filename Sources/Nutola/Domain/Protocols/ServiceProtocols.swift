@@ -21,7 +21,9 @@ protocol RecordingService: AnyObject {
         meetingRepository: MeetingRepository,
         folderRepository: FolderRepository,
         calendarRepository: CalendarRepository,
-        settings: SettingsRepository
+        settings: SettingsRepository,
+        templateOverrides: TemplateOverrideRepository?,
+        availableTemplateNames: @escaping () -> [String]
     ) async -> Result<RecordingSessionHandle, RecordingError>
 
     func continueRecording(

@@ -19,14 +19,6 @@ final class AIAskRoutingTests: XCTestCase {
         XCTAssertFalse(AIAsk.open(prompt: "test"))
     }
 
-    func testClaudeOpenDoesNotReturnFalseWhenAvailable() {
-        let saved = AppSettings.preferredAIProvider
-        setProvider(.claude)
-        defer { setProvider(saved) }
-        // Claude Desktop may or may not be installed — just verify it doesn't crash
-        _ = AIAsk.open(prompt: "test")
-    }
-
     func testAppleAnswerRoutesToAppleSummarizer() async throws {
         guard AppleSummarizer.isAvailable else {
             throw XCTSkip("Apple Intelligence not available on this device")

@@ -96,6 +96,7 @@ struct MockSettingsRepository: SettingsRepository {
     var preferredAIProvider: AIProvider = .apple
     var preferClaudeSummaries = false
     var showLiveRecordingCard = true
+    var smartTemplatesEnabled = false
 }
 
 // MARK: - Processing
@@ -175,7 +176,9 @@ final class MockRecordingService: RecordingService {
         meetingRepository: MeetingRepository,
         folderRepository: FolderRepository,
         calendarRepository: CalendarRepository,
-        settings: SettingsRepository
+        settings: SettingsRepository,
+        templateOverrides: TemplateOverrideRepository?,
+        availableTemplateNames: @escaping () -> [String]
     ) async -> Result<RecordingSessionHandle, RecordingError> {
         startCallCount += 1
         guard let startResult else { return .failure(.alreadyRecording) }

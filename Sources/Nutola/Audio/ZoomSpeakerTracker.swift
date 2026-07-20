@@ -382,12 +382,25 @@ enum ZoomActiveSpeakerReader {
             activeOut = selectedTiles
             source = .selectedTile
         }
+        // Validate the caption against the roster when we have one: Zoom's
+        // live-transcript lines name actual participants, so a parsed "name"
+        // that isn't close to anyone on the roster is a false positive — usually
+        // a window title or tab label that happened to contain a colon. When
+        // the roster is empty (meeting just started, or AX couldn't read tiles),
+        // fall back to a name-shape heuristic so junk like "Backend Monorepo
+        // DevX" doesn't sneak in as a speaker.
+        let validatedCaption = latestCaption.flatMap { caption -> CaptionLine? in
+            if !rosterOut.isEmpty {
+                return nameMatchesRoster(caption.name, rosterOut) ? caption : nil
+            }
+            return looksLikePersonName(caption.name) ? caption : nil
+        }
         let result = ScanResult(
             zoomPID: app.processIdentifier,
             roster: rosterOut,
             active: deduped(activeOut).filter { !isLocalParticipant($0) },
             activeSource: source,
-            latestCaption: latestCaption,
+            latestCaption: validatedCaption,
             localParticipantMuted: localMuted)
         lastScanSignature = signature
         lastScanResult = result
@@ -666,6 +679,61 @@ enum ZoomActiveSpeakerReader {
               match.numberOfRanges > 1,
               let capture = Range(match.range(at: 1), in: original) else { return nil }
         return String(original[capture])
+    }
+
+    /// True when `name` matches (or closely resembles) an entry in `roster`.
+    /// Used to filter caption false positives: Zoom's live-transcript lines
+    /// always name an actual participant, so a parsed "name" that isn't close
+    /// to anyone on the roster is a window title or tab label, not a speaker.
+    private static func nameMatchesRoster(_ name: String, _ roster: [String]) -> Bool {
+        let n = name.lowercased()
+        for r in roster {
+            let rL = r.lowercased()
+            if n == rL { return true }
+            if n.hasPrefix(rL) || rL.hasPrefix(n) { return true }
+            // Match on last name when the roster entry has multiple tokens
+            // ("David Cleckley" ↔ "David", "Cleckley", "David C.").
+            let rTokens = rL.split(separator: " ").map(String.init)
+            let nTokens = n.split(separator: " ").map(String.init)
+            if let last = rTokens.last, nTokens.contains(last) { return true }
+            if let last = nTokens.last, rTokens.contains(last) { return true }
+        }
+        return false
+    }
+
+    /// Heuristic used when no roster is available: does `name` look like a real
+    /// person's name rather than a window/tab title or a technical phrase?
+    /// Rejects multi-word names containing technical/organizational terms
+    /// ("Backend Monorepo DevX", "Identity Intelligence Engineering") and
+    /// names that are too long or all-lowercase. Keeps it conservative — when
+    //  in doubt, reject: a dropped caption is far less damaging than a wrong
+    //  speaker name polluting the transcript attribution.
+    private static let technicalNameTerms: Set<String> = [
+        "monorepo", "devx", "backend", "frontend", "repository", "infra",
+        "pipeline", "dashboard", "service", "sdk", "api", "webhook",
+        "intelligence", "engineering", "platform", "portal", "webview",
+        "coordination", "protocol", "mitigation", "invalidation",
+    ]
+
+    private static func looksLikePersonName(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2, trimmed.count <= 60 else { return false }
+        let tokens = trimmed.split(separator: " ").map(String.init)
+        guard tokens.count <= 4 else { return false }
+        // Multi-word names containing a technical term are almost always
+        // window/tab titles ("Backend Monorepo DevX"), not people.
+        for token in tokens {
+            if technicalNameTerms.contains(token.lowercased()) { return false }
+        }
+        // Each token should be capitalized (a person's name) — reject
+        // all-lowercase or all-uppercase strings, which are usually code
+        // identifiers or constants.
+        for token in tokens {
+            guard let first = token.first, first.isLetter, first.isUppercase || token.count == 1 else {
+                return false
+            }
+        }
+        return true
     }
 
     private static func cleaned(_ raw: String) -> String? {

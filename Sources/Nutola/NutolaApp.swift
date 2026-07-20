@@ -23,7 +23,6 @@ struct NutolaApp: App {
                 nextEvent: menuBarNextEvent)
         }
         .menuBarExtraStyle(.window)
-
         Window("Nutola", id: "main") {
             MainWindowView()
                 .environmentObject(app)

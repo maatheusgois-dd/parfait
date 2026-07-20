@@ -12,7 +12,9 @@ final class UseCaseTests: XCTestCase {
         let useCase = PrepareMeetingUseCase(
             meetingRepository: meetings,
             folderRepository: folders,
-            settings: settings)
+            settings: settings,
+            templateOverrides: TemplateOverrideStore(),
+            availableTemplateNames: { [] })
 
         let result = useCase.execute(calendarEvent: ArchitectureFixtures.sampleCalendarEvent())
         guard case .success(let meeting) = result else {
@@ -31,13 +33,57 @@ final class UseCaseTests: XCTestCase {
         let useCase = PrepareMeetingUseCase(
             meetingRepository: meetings,
             folderRepository: MeetingFolderStore(),
-            settings: settings)
+            settings: settings,
+            templateOverrides: TemplateOverrideStore(),
+            availableTemplateNames: { [] })
 
         guard case .success(let meeting) = useCase.execute(
             calendarEvent: ArchitectureFixtures.sampleCalendarEvent()) else {
             return XCTFail("Expected success")
         }
         XCTAssertEqual(meeting.templateName, "1-on-1")
+    }
+
+    func testPrepareMeetingUsesPerEventOverrideWhenAvailable() {
+        let meetings = MockMeetingRepository()
+        let settings = MockSettingsRepository()
+        let overrides = TemplateOverrideStore()
+        let event = ArchitectureFixtures.sampleCalendarEvent(id: "evt-77", title: "Interview with Alex")
+        overrides.set(eventID: event.id, templateName: "Interview")
+        let useCase = PrepareMeetingUseCase(
+            meetingRepository: meetings,
+            folderRepository: MeetingFolderStore(),
+            settings: settings,
+            templateOverrides: overrides,
+            availableTemplateNames: { ["Meeting Notes", "Interview", "1-on-1"] })
+
+        guard case .success(let meeting) = useCase.execute(calendarEvent: event) else {
+            return XCTFail("Expected success")
+        }
+        // Per-event assignment wins over the default template.
+        XCTAssertEqual(meeting.templateName, "Interview")
+    }
+
+    func testPrepareMeetingIgnoresOverrideWhenTemplateDeleted() {
+        let meetings = MockMeetingRepository()
+        var settings = MockSettingsRepository()
+        settings.defaultTemplate = "Meeting Notes"
+        let overrides = TemplateOverrideStore()
+        let event = ArchitectureFixtures.sampleCalendarEvent(id: "evt-88", title: "Standup")
+        overrides.set(eventID: event.id, templateName: "Gone")
+        let useCase = PrepareMeetingUseCase(
+            meetingRepository: meetings,
+            folderRepository: MeetingFolderStore(),
+            settings: settings,
+            templateOverrides: overrides,
+            availableTemplateNames: { ["Meeting Notes"] }) // "Gone" no longer exists
+
+        guard case .success(let meeting) = useCase.execute(calendarEvent: event) else {
+            return XCTFail("Expected success")
+        }
+        // Stale override is pruned on read; default applies.
+        XCTAssertEqual(meeting.templateName, "Meeting Notes")
+        XCTAssertNil(overrides.overrides[event.id], "stale override should have been pruned")
     }
 
     // MARK: - Open calendar event
@@ -55,7 +101,9 @@ final class UseCaseTests: XCTestCase {
         let prepare = PrepareMeetingUseCase(
             meetingRepository: meetings,
             folderRepository: MeetingFolderStore(),
-            settings: MockSettingsRepository())
+            settings: MockSettingsRepository(),
+            templateOverrides: TemplateOverrideStore(),
+            availableTemplateNames: { [] })
         let useCase = OpenCalendarEventUseCase(
             meetingRepository: meetings,
             calendarRepository: calendar,
@@ -71,7 +119,9 @@ final class UseCaseTests: XCTestCase {
         let prepare = PrepareMeetingUseCase(
             meetingRepository: meetings,
             folderRepository: MeetingFolderStore(),
-            settings: MockSettingsRepository())
+            settings: MockSettingsRepository(),
+            templateOverrides: TemplateOverrideStore(),
+            availableTemplateNames: { [] })
         let useCase = OpenCalendarEventUseCase(
             meetingRepository: meetings,
             calendarRepository: calendar,

@@ -208,6 +208,23 @@ private struct GeneralSettings: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("About") {
+                HStack {
+                    Text("Nutola")
+                        .font(.nutola(14, .semibold))
+                    Spacer()
+                    if let v = AppVersion.displayVersion {
+                        Text(v)
+                            .font(.nutola(12))
+                            .foregroundStyle(.secondary)
+                            .help("Version \(v) (build \(AppVersion.buildNumber))")
+                    }
+                }
+                Link("Changelog",
+                     destination: AppVersion.changelogURL)
+                    .font(.nutola(11))
+            }
+
             Section("Reset") {
                 Button("Reset to Defaults", role: .destructive) {
                     showResetConfirm = true
@@ -424,6 +441,11 @@ private struct CalendarSettings: View {
                                 .foregroundStyle(Theme.blueberry)
                                 .help("Unarchive series")
                             }
+                            .contentShape(Rectangle())
+                            .onTapGesture(count: 2) {
+                                archivedStore.unarchiveTitle(title)
+                                Task { await app.calendar.refreshAgenda() }
+                            }
                         }
                         ForEach(archivedStore.archivedEvents) { evt in
                             HStack {
@@ -440,15 +462,22 @@ private struct CalendarSettings: View {
                                 .foregroundStyle(Theme.blueberry)
                                 .help("Unarchive event")
                             }
+                            .contentShape(Rectangle())
+                            .onTapGesture(count: 2) {
+                                archivedStore.unarchiveEvent(id: evt.id)
+                                Task { await app.calendar.refreshAgenda() }
+                            }
                         }
                         Divider()
-                        Button(role: .destructive) {
+                        Button {
                             archivedStore.clearAll()
                             Task { await app.calendar.refreshAgenda() }
                         } label: {
-                            Label("Clear all archived", systemImage: "trash")
+                            Label("Unarchive all", systemImage: "arrow.up.out.of.square")
                                 .font(.nutola(11))
                         }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.blueberry)
                     }
                 }
             }
@@ -955,6 +984,11 @@ private struct TemplateSettings: View {
     @State private var draftName = ""
     @State private var draftBody = ""
     @State private var saveError: String?
+    @State private var deleteError: String?
+    @State private var showAISheet = false
+    @State private var aiPrompt = ""
+    @State private var aiError: String?
+    @State private var isGenerating = false
 
     var body: some View {
         HSplitView {
@@ -973,14 +1007,36 @@ private struct TemplateSettings: View {
                             name: name,
                             body: "# {{title}}\n\n## Highlights\nWhat mattered most.\n"))
                         reload(select: name)
-                    } label: { Image(systemName: "plus") }
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .help("New template")
                     Button {
-                        if let selected {
-                            try? app.templates.delete(named: selected)
-                            reload(select: nil)
+                        guard let selected else {
+                            NutolaConsoleLog.app("[TemplateSettings] delete: no selection")
+                            return
                         }
-                    } label: { Image(systemName: "minus") }
-                        .disabled(selected == nil)
+                        NutolaConsoleLog.app("[TemplateSettings] delete: \(selected)")
+                        do {
+                            try app.templates.delete(named: selected)
+                            NutolaConsoleLog.app("[TemplateSettings] delete succeeded, reloading")
+                            reload(select: nil)
+                            deleteError = nil
+                        } catch {
+                            NutolaConsoleLog.app("[TemplateSettings] delete failed: \(error)")
+                            deleteError = error.localizedDescription
+                        }
+                    } label: {
+                        Image(systemName: "minus")
+                    }
+                    .disabled(selected == nil)
+                    .help("Delete template")
+                    Button {
+                        aiError = nil; showAISheet = true
+                    } label: {
+                        Image(systemName: "sparkles")
+                    }
+                    .help("Generate template with AI")
                     Spacer()
                 }
                 .buttonStyle(.plain)
@@ -1008,6 +1064,15 @@ private struct TemplateSettings: View {
                                 .foregroundStyle(.orange)
                         }
                         Spacer()
+                        Button {
+                            aiError = nil; showAISheet = true
+                        } label: {
+                            Label("Generate with AI", systemImage: "sparkles")
+                                .font(.nutola(12, .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(actionColor)
+                        .help("Generate a new template with AI")
                         Button("Save") { save() }
                             .buttonStyle(.borderedProminent)
                             .tint(actionColor)
@@ -1024,6 +1089,99 @@ private struct TemplateSettings: View {
         }
         .onAppear { reload(select: selected ?? templates.first?.name) }
         .onChange(of: selected) { loadDraft() }
+        .sheet(isPresented: $showAISheet) {
+            aiTemplateSheet
+        }
+    }
+
+    private var aiTemplateSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Generate Template with AI")
+                    .font(.nutola(15, .bold))
+                Spacer()
+                Button("Cancel") { showAISheet = false }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+            Text("Describe what kind of meeting template you need:")
+                .font(.nutola(12))
+                .foregroundStyle(.secondary)
+            TextEditor(text: $aiPrompt)
+                .font(.system(size: 12))
+                .scrollContentBackground(.hidden)
+                .frame(height: 80)
+                .padding(8)
+                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+            Text("Available placeholders: {{title}} {{date}} {{attendees}} {{duration}} {{app}}")
+                .font(.nutola(10))
+                .foregroundStyle(.secondary)
+            HStack {
+                if let aiError {
+                    Label(aiError, systemImage: "exclamationmark.triangle")
+                        .font(.nutola(11))
+                        .foregroundStyle(.orange)
+                }
+                Spacer()
+                Button(isGenerating ? "Generating…" : "Generate") {
+                    generateTemplate()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(actionColor)
+                .disabled(isGenerating || aiPrompt.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+    }
+
+    private func generateTemplate() {
+        let promptText = aiPrompt.trimmingCharacters(in: .whitespaces)
+        guard !promptText.isEmpty else { return }
+        aiError = nil
+        isGenerating = true
+        let prompt = """
+        Create a meeting notes template in Markdown. \(promptText)
+        Use these placeholders: {{title}} {{date}} {{attendees}} {{duration}} {{app}}.
+        Use ## headings to guide the AI summarizer — text under a heading tells it what belongs there.
+        Return ONLY the markdown template, no explanation.
+        """
+        Task {
+            do {
+                let result = try await AIAsk.answer(prompt: prompt)
+                // Sanitize the prompt into a valid template name — TemplateStore
+                // rejects "/" and ":" (used as path separators), and we prefix
+                // with "AI " so generated templates group together in the list.
+                var raw = String(promptText.prefix(40)).trimmingCharacters(in: .whitespaces)
+                raw = raw.replacingOccurrences(of: "/", with: "-")
+                    .replacingOccurrences(of: ":", with: "-")
+                    .replacingOccurrences(of: "\n", with: " ")
+                let baseName = raw.isEmpty ? "AI Template" : "AI - \(raw)"
+                let finalName = nextUniqueTemplateName(baseName)
+                try app.templates.save(SummaryTemplate(name: finalName, body: result))
+                await MainActor.run {
+                    isGenerating = false
+                    showAISheet = false
+                    aiPrompt = ""
+                    reload(select: finalName)
+                }
+            } catch {
+                await MainActor.run {
+                    isGenerating = false
+                    aiError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    /// Returns `baseName`, or `baseName 2`, `baseName 3`, … — whatever isn't
+    /// already in `templates`. Avoids TemplateError.nameTaken on AI generation.
+    private func nextUniqueTemplateName(_ baseName: String) -> String {
+        let existing = Set(templates.map { $0.name.lowercased() })
+        guard existing.contains(baseName.lowercased()) else { return baseName }
+        var n = 2
+        while existing.contains("\(baseName) \(n)".lowercased()) { n += 1 }
+        return "\(baseName) \(n)"
     }
 
     private func reload(select: String?) {

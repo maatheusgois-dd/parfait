@@ -56,4 +56,5 @@ struct UserDefaultsSettingsRepository: SettingsRepository {
     var preferredAIProvider: AIProvider { AppSettings.preferredAIProvider }
     var preferClaudeSummaries: Bool { AppSettings.preferClaudeSummaries }
     var showLiveRecordingCard: Bool { AppSettings.showLiveRecordingCard }
+    var smartTemplatesEnabled: Bool { AppSettings.smartTemplatesEnabled }
 }

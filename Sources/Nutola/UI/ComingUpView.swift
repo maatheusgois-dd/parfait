@@ -26,6 +26,9 @@ struct ComingUpView: View {
         }
         .background(Theme.surface(scheme))
         .task { await app.calendar.refreshAgenda() }
+        .onChange(of: app.templates.list().map(\.name)) { _, names in
+            app.templateOverrides.pruneUnavailable(available: names)
+        }
     }
 
     private var agendaSection: some View {
@@ -353,6 +356,8 @@ struct ComingUpView: View {
                 Label("Archive this event only", systemImage: "archivebox")
             }
             Divider()
+            templateContextMenu(for: event)
+            Divider()
             if archivedStore.hasAny {
                 Menu("Archived events") {
                     ForEach(Array(archivedStore.archivedTitles).sorted(), id: \.self) { title in
@@ -402,11 +407,101 @@ struct ComingUpView: View {
             }
             .buttonStyle(.plain)
 
+            templatePickerChip(for: event)
+
             if showJoin, let url = event.conferenceURL {
                 ConferenceJoinButton(label: event.joinLabel, url: url)
             }
         }
         .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// Per-event template assignment chip. Shows the assigned template name (or
+    /// a muted "Template" hint on hover), and opens a menu of all templates
+    /// plus a "Use default" entry to clear the override. The assignment is
+    /// honored by PrepareMeetingUseCase and RecordingServiceImpl, so both the
+    /// manual "Record" path and mic-detection auto-start use it.
+    @ViewBuilder
+    private func templatePickerChip(for event: CalendarEventSummary) -> some View {
+        let names = app.templates.list().map(\.name)
+        let assigned = app.templateOverrides.overrides[event.id]
+        let resolved = (assigned.map { names.contains($0) ? $0 : nil }) ?? nil
+        Menu {
+            ForEach(names, id: \.self) { name in
+                Button {
+                    app.templateOverrides.set(eventID: event.id, templateName: name)
+                } label: {
+                    if name == resolved {
+                        Label(name, systemImage: "checkmark")
+                    } else {
+                        Text(name)
+                    }
+                }
+            }
+            if resolved != nil {
+                Divider()
+                Button {
+                    app.templateOverrides.clear(eventID: event.id)
+                } label: {
+                    Label("Use default", systemImage: "arrow.counterclockwise")
+                }
+            }
+        } label: {
+            templateChipLabel(name: resolved)
+        }
+        .buttonStyle(.plain)
+        .help(resolved.map { "Template: \($0)" } ?? "Assign a template for this meeting")
+    }
+
+    @ViewBuilder
+    private func templateChipLabel(name: String?) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: "doc.text")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(name == nil ? Theme.secondary(scheme) : Theme.mint(scheme))
+            if let name {
+                Text(name)
+                    .font(.nutola(11, .medium))
+                    .foregroundStyle(Theme.heading(scheme))
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(
+            (name == nil ? Color.secondary.opacity(0.08) : Theme.mint(scheme).opacity(0.12)),
+            in: Capsule()
+        )
+        .contentShape(Rectangle())
+    }
+    /// Context-menu version of the template picker — same options, nested
+    /// under a "Template" submenu. Kept in sync with `templatePickerChip`.
+    @ViewBuilder
+    private func templateContextMenu(for event: CalendarEventSummary) -> some View {
+        let names = app.templates.list().map(\.name)
+        let assigned = app.templateOverrides.overrides[event.id]
+        let resolved = (assigned.map { names.contains($0) ? $0 : nil }) ?? nil
+        Menu("Template") {
+            ForEach(names, id: \.self) { name in
+                Button {
+                    app.templateOverrides.set(eventID: event.id, templateName: name)
+                } label: {
+                    if name == resolved {
+                        Label(name, systemImage: "checkmark")
+                    } else {
+                        Text(name)
+                    }
+                }
+            }
+            if resolved != nil {
+                Divider()
+                Button {
+                    app.templateOverrides.clear(eventID: event.id)
+                } label: {
+                    Label("Use default", systemImage: "arrow.counterclockwise")
+                }
+            }
+        }
     }
 
     @ViewBuilder

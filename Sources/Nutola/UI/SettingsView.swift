@@ -208,6 +208,23 @@ private struct GeneralSettings: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("About") {
+                HStack {
+                    Text("Nutola")
+                        .font(.nutola(14, .semibold))
+                    Spacer()
+                    if let v = AppVersion.displayVersion {
+                        Text(v)
+                            .font(.nutola(12))
+                            .foregroundStyle(.secondary)
+                            .help("Version \(v) (build \(AppVersion.buildNumber))")
+                    }
+                }
+                Link("Changelog",
+                     destination: AppVersion.changelogURL)
+                    .font(.nutola(11))
+            }
+
             Section("Reset") {
                 Button("Reset to Defaults", role: .destructive) {
                     showResetConfirm = true

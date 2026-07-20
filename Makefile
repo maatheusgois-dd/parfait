@@ -36,6 +36,12 @@ app: build
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	cp "$(BINARY)" "$(APP)/Contents/MacOS/$(APP_NAME)"
 	cp packaging/Info.plist "$(APP)/Contents/Info.plist"
+	@# Stamp the version from VERSION (single source of truth) into the
+	@# bundled Info.plist. CFBundleShortVersionString = VERSION;
+	@# CFBundleVersion = VERSION with dots stripped (build number).
+	@V=$$(cat VERSION 2>/dev/null | tr -d ' \n'); \
+	B=$$(echo "$$V" | tr -d '.'); \
+	python3 -c "import plistlib; p='$(APP)/Contents/Info.plist'; d=plistlib.load(open(p,'rb')); d['CFBundleShortVersionString']='$$V'; d['CFBundleVersion']='$$B'; plistlib.dump(d, open(p,'wb'))"
 	cp Resources/AppIcon.icns "$(APP)/Contents/Resources/AppIcon.icns"
 	@# SwiftPM resource bundle (menu bar icon) must ride along or Bundle.module lookups fail
 	@if [ -d ".build/release/$(APP_NAME)_$(APP_NAME).bundle" ]; then \

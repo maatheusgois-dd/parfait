@@ -321,11 +321,13 @@ final class RecordingServiceImpl: RecordingService {
     // the Coming Up view still has the event's real start, so reuse it and
     // avoid creating a duplicate recording entry with no calendar link.
     let now = Date()
+*
     let candidates = meetingRepository.meetings.filter { meeting in
       guard meeting.state == .prep,
             meeting.calendarEventID != nil,
             let start = meeting.calendarEventStart
       else { return false }
+*
       return abs(start.timeIntervalSince(now)) <= 15 * 60
     }
     if let prep = candidates.first,

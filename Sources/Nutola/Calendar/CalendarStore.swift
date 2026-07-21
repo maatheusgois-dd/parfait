@@ -102,11 +102,13 @@ final class CalendarStore: ObservableObject {
         let enabledCalendars = CalendarSources.enabledEKCalendars()
         return await Task.detached { [eventStore, enabledCalendars] in
             if enabledCalendars?.isEmpty == true { return nil }
+            let archive = ArchivedEventStore()
             let predicate = eventStore.predicateForEvents(
                 withStart: now.addingTimeInterval(-4 * 3600),
                 end: now.addingTimeInterval(10 * 60),
                 calendars: enabledCalendars)
             let events = eventStore.events(matching: predicate)
+                .filter { !archive.isArchived(title: $0.title ?? "", eventID: $0.eventIdentifier ?? "") }
             guard let selected = CalendarEventSelector.select(from: events, at: now, sourceApp: sourceApp)
             else { return nil }
             guard let mapped = CalendarAgendaBuilder.map(selected) else { return nil }

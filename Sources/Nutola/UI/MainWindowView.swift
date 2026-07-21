@@ -98,18 +98,21 @@ struct MainWindowView: View {
         Label(label, systemImage: icon)
             .font(.nutola(13, .medium))
             .foregroundStyle(isSelected ? Theme.heading(scheme) : Theme.secondary(scheme))
-            .tag(item)
-            .listRowBackground(
-                Group {
-                    if isSelected {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(actionColor.opacity(0.12))
-                    } else {
-                        Color.clear
-                    }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(actionColor.opacity(0.12))
+                } else {
+                    Color.clear
                 }
-            )
-            .listRowInsets(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
+            }
+            .tag(item)
+            // Clear the List's default selection tint — we draw our own above.
+            // Without this, .sidebar style stacks its highlight on ours.
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6))
     }
 
     private var foldersSection: some View {
